@@ -110,22 +110,51 @@ paths:
       operationId: getHiveNotes
       summary: Notes attached to one hive in a time window.
       description: |
-        x-observed: response is a BARE ARRAY of notes (the docs describe an object
-        `{ notes: [...] }`; the live API returned a bare array — please confirm
-        the intended shape).
+        Returns beekeeper notes attached to the specified hive in the requested window.
+        x-observed: the response shape depends on whether notes exist in the window:
+          * No notes: returns a bare empty array `[]`.
+          * One or more notes: returns an object `{ "notes": [ ... ] }`.
+        Clients should accept both shapes.
+        x-observed: apiary-level notes created in the web UI are NOT returned by this
+        endpoint (or any external API endpoint); only hive-specific notes are returned.
+        UI-only fields like General State ratings and rich text bodies are not exposed.
       parameters:
         - $ref: "#/components/parameters/HiveId"
         - $ref: "#/components/parameters/Start"
         - $ref: "#/components/parameters/End"
       responses:
         "200":
-          description: Array of notes (may be empty).
+          description: Notes in window (bare empty array if none, or object wrapper if present).
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: "#/components/schemas/Note" }
-              example: []
+                oneOf:
+                  - type: array
+                    items: { $ref: "#/components/schemas/Note" }
+                    description: Empty array returned when no notes exist in window.
+                  - type: object
+                    required: [notes]
+                    properties:
+                      notes:
+                        type: array
+                        items: { $ref: "#/components/schemas/Note" }
+                    description: Object wrapper returned when one or more notes exist.
+              examples:
+                empty:
+                  summary: No notes in window (bare array)
+                  value: []
+                populated:
+                  summary: One or more notes in window (wrapped object)
+                  value:
+                    notes:
+                      - id: "note-12345"
+                        hiveId: "hive-67890"
+                        description: "super 3, hoggs"
+                        tags:
+                          - id: "703"
+                            name: "Super+"
+                        timestamp: 1749079680
+                        created: 1749079702
         "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "412": { $ref: "#/components/responses/AuthError" }
@@ -321,19 +350,43 @@ components:
           type: [number, "null"]
           description: "x-observed: present on hives with radar/movement sensors. Unit/scale unconfirmed."
 
+    NoteTag:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+      example:
+        id: "703"
+        name: "Super+"
+
     Note:
       type: object
-      description: "Shape inferred from docs; live sample was empty. Please confirm field names."
+      description: |
+        Beekeeper note attached to a hive. Observed from live GET /user/hive/{id}/notes responses.
+        x-observed: apiary-level notes created in the web UI are not returned by the API.
       properties:
         id: { type: string }
         hiveId: { type: string }
         description: { type: string }
         tags:
           type: array
-          items: { type: string }
+          items: { $ref: "#/components/schemas/NoteTag" }
         timestamp: { type: integer, format: int64 }
         created: { type: integer, format: int64 }
-        modified: { type: integer, format: int64 }
+        modified:
+          type: [integer, "null"]
+          format: int64
+          description: "x-observed: unconfirmed on live samples; retained for compatibility if present."
+      example:
+        id: "note-12345"
+        hiveId: "hive-67890"
+        description: "super 3, hoggs"
+        tags:
+          - id: "703"
+            name: "Super+"
+        timestamp: 1749079680
+        created: 1749079702
 
     Error:
       type: object

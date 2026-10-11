@@ -122,11 +122,21 @@ class BroodMinderClient:
             f"/user/hive/{hive_id}/readings", {"start": int(start), "end": int(end)}
         )
 
-    def hive_notes(self, hive_id: str | int, start: int, end: int) -> Any:
-        """GET /user/hive/{id}/notes — hive notes in window."""
-        return self.get_json(
+    def hive_notes(self, hive_id: str | int, start: int, end: int) -> list[dict[str, Any]]:
+        """GET /user/hive/{id}/notes — hive notes in window.
+
+        Normalizes the response to always return a list of note dictionaries,
+        handling both the empty bare array ``[]`` and the populated object
+        wrapper ``{"notes": [...]}`` returned by the API.
+        """
+        payload = self.get_json(
             f"/user/hive/{hive_id}/notes", {"start": int(start), "end": int(end)}
         )
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            return payload.get("notes", []) or []
+        return []
 
     def device_readings(self, device_id: str | int, start: int, end: int) -> Any:
         """GET /user/device/{id}/readings — single-device sensor readings."""

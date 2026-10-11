@@ -118,11 +118,17 @@ def _normalize_notes(payload):
 def test_hive_notes_shape(client, sample_hive_id, recent_window):
     start, end = recent_window
     payload = client.hive_notes(sample_hive_id, start, end)
+    assert isinstance(payload, list)
     notes = _normalize_notes(payload)
     assert isinstance(notes, list)
     for n in notes:
         assert "description" in n or "note" in n
         assert "timestamp" in n or "created" in n
+        if "tags" in n and n["tags"]:
+            assert isinstance(n["tags"], list)
+            for t in n["tags"]:
+                assert isinstance(t, dict)
+                assert "id" in t and "name" in t
 
 
 # --------------------------------------------------------------------------

@@ -125,6 +125,40 @@ def test_client_init_requires_key(monkeypatch):
     assert "BROODMINDER_API_KEY not set" in str(exc_info.value)
 
 
+def test_client_hive_notes_normalization(monkeypatch):
+    client = BroodMinderClient(api_key="test-key")
+    sample_notes = [
+        {
+            "id": "note-1",
+            "hiveId": "h1",
+            "description": "super 3, hoggs",
+            "tags": [{"id": "703", "name": "Super+"}],
+            "timestamp": 1749079680,
+            "created": 1749079702,
+        }
+    ]
+
+    # Case 1: Bare array returned by API (e.g. empty or legacy)
+    monkeypatch.setattr(client, "get_json", lambda path, params: sample_notes)
+    assert client.hive_notes("h1", 1000, 2000) == sample_notes
+
+    # Case 2: Dict wrapper {"notes": [...]} returned when notes exist
+    monkeypatch.setattr(client, "get_json", lambda path, params: {"notes": sample_notes})
+    assert client.hive_notes("h1", 1000, 2000) == sample_notes
+
+    # Case 3: Empty bare list returned when no notes exist
+    monkeypatch.setattr(client, "get_json", lambda path, params: [])
+    assert client.hive_notes("h1", 1000, 2000) == []
+
+    # Case 4: Dict with empty notes list
+    monkeypatch.setattr(client, "get_json", lambda path, params: {"notes": []})
+    assert client.hive_notes("h1", 1000, 2000) == []
+
+    # Case 5: None or unexpected payload falls back safely to empty list
+    monkeypatch.setattr(client, "get_json", lambda path, params: None)
+    assert client.hive_notes("h1", 1000, 2000) == []
+
+
 def test_flatten_merge_deduplication(tmp_path, monkeypatch):
     import scripts.flatten as fl
 
