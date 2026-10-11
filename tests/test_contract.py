@@ -124,7 +124,7 @@ def test_hive_notes_shape(client, sample_hive_id, recent_window):
     for n in notes:
         assert "description" in n or "note" in n
         assert "timestamp" in n or "created" in n
-        if "tags" in n and n["tags"]:
+        if "tags" in n:
             assert isinstance(n["tags"], list)
             for t in n["tags"]:
                 assert isinstance(t, dict)

@@ -131,10 +131,10 @@ def test_client_hive_notes_normalization(monkeypatch):
         {
             "id": "note-1",
             "hiveId": "h1",
-            "description": "super 3, hoggs",
-            "tags": [{"id": "703", "name": "Super+"}],
-            "timestamp": 1749079680,
-            "created": 1749079702,
+            "description": "Added winter feed block",
+            "tags": [{"id": "tag-1", "name": "Feeding"}],
+            "timestamp": 1700000000,
+            "created": 1700000050,
         }
     ]
 
