@@ -106,21 +106,27 @@ def test_hive_readings_timestamps_in_window(client, sample_hive_id, recent_windo
 # --------------------------------------------------------------------------
 # /user/hive/{id}/notes
 # --------------------------------------------------------------------------
-def _normalize_notes(payload):
-    """Notes come back as a bare list (observed) or {notes:[...]} (documented)."""
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        return payload.get("notes", [])
-    raise AssertionError(f"unexpected notes payload type: {type(payload)}")
-
-
 def test_hive_notes_shape(client, sample_hive_id, recent_window):
     start, end = recent_window
-    payload = client.hive_notes(sample_hive_id, start, end)
-    assert isinstance(payload, list)
-    notes = _normalize_notes(payload)
-    assert isinstance(notes, list)
+    raw_payload = client.hive_notes_raw(sample_hive_id, start, end)
+    if isinstance(raw_payload, list):
+        # Empty array variant per OpenAPI oneOf schema (maxItems: 0)
+        assert raw_payload == []
+        notes = raw_payload
+    elif isinstance(raw_payload, dict):
+        # Populated wrapper variant per OpenAPI oneOf schema (minItems: 1)
+        assert "notes" in raw_payload
+        notes = raw_payload["notes"]
+        assert isinstance(notes, list)
+        assert len(notes) >= 1
+    else:
+        raise AssertionError(f"unexpected raw notes wire shape: {type(raw_payload)}")
+
+    # Also verify SDK normalization behaves consistently
+    normalized = client.hive_notes(sample_hive_id, start, end)
+    assert isinstance(normalized, list)
+    assert normalized == notes
+
     for n in notes:
         assert "description" in n or "note" in n
         assert "timestamp" in n or "created" in n
