@@ -158,6 +158,13 @@ def test_client_hive_notes_normalization(monkeypatch):
     monkeypatch.setattr(client, "get_json", lambda path, params: None)
     assert client.hive_notes("h1", 1000, 2000) == []
 
+    # Case 6: raw=True preserves the wire envelope losslessly
+    monkeypatch.setattr(client, "get_json", lambda path, params: {"notes": sample_notes})
+    assert client.hive_notes("h1", 1000, 2000, raw=True) == {"notes": sample_notes}
+
+    # Case 7: hive_notes_raw convenience alias returns exact wire payload
+    assert client.hive_notes_raw("h1", 1000, 2000) == {"notes": sample_notes}
+
 
 def test_flatten_merge_deduplication(tmp_path, monkeypatch):
     import scripts.flatten as fl
@@ -396,7 +403,7 @@ def test_extract_all_catchup_roster_check(tmp_path, monkeypatch, capsys):
             calls["readings"] += 1
             return []
 
-        def hive_notes(self, hid, s, e):
+        def hive_notes(self, hid, s, e, *args, **kwargs):
             return []
 
     monkeypatch.setattr(ex, "BroodMinderClient", MockClient)

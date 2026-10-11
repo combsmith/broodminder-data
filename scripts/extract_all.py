@@ -153,7 +153,10 @@ def fetch_window(bm, a: dict, h: dict, hid: str, s: int, e: int, hdir: Path, arg
     write_gz(hdir / f"{s}-{e}.readings.json.gz", readings)
     rec["reading_rows"] = count_reading_rows(readings)
     if not args.no_notes:
-        notes = bm.hive_notes(hid, s, e)
+        try:
+            notes = bm.hive_notes(hid, s, e, raw=True)
+        except TypeError:
+            notes = bm.hive_notes(hid, s, e)
         write_gz(hdir / f"{s}-{e}.notes.json.gz", notes)
         rec["notes"] = count_notes(notes)
     return rec
