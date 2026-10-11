@@ -135,7 +135,8 @@ class BroodMinderClient:
         if isinstance(payload, list):
             return payload
         if isinstance(payload, dict):
-            return payload.get("notes", []) or []
+            notes = payload.get("notes")
+            return notes if isinstance(notes, list) else []
         return []
 
     def device_readings(self, device_id: str | int, start: int, end: int) -> Any:
