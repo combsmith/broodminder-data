@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added `raw=True` option to `BroodMinderClient.hive_notes()` and added `BroodMinderClient.hive_notes_raw()` convenience method to retrieve unnormalized wire payloads for lossless archiving.
+
 ### Changed
 - Normalized `BroodMinderClient.hive_notes()` to consistently return `list[dict]` regardless of whether the API returns a bare array (`[]` when empty) or an object wrapper (`{"notes": [...]}` when populated).
 - Updated OpenAPI 3.1 specification for `/user/hive/{id}/notes` with `oneOf` response schema modeling both observed response shapes.
