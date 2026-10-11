@@ -130,7 +130,7 @@ paths:
               schema:
                 oneOf:
                   - type: array
-                    items: { $ref: "#/components/schemas/Note" }
+                    maxItems: 0
                     description: Empty array returned when no notes exist in window.
                   - type: object
                     required: [notes]
