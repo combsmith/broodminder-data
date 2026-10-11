@@ -128,7 +128,8 @@ def test_hive_notes_shape(client, sample_hive_id, recent_window):
             assert isinstance(n["tags"], list)
             for t in n["tags"]:
                 assert isinstance(t, dict)
-                assert "id" in t and "name" in t
+                assert "id" in t
+                assert "name" in t
 
 
 # --------------------------------------------------------------------------
