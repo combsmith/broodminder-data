@@ -30,7 +30,10 @@ REQUIREMENTS_FILE = ROOT / "requirements.txt"
 BUILD_REQUIREMENTS_FILE = ROOT / "scripts" / "build-requirements.txt"
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 
-_PIN_LINE = re.compile(r"^(?P<name>[A-Za-z0-9._-]+)==(?P<version>[^\s\\]+)")
+_PIN_LINE = re.compile(
+    r"^(?P<name>[A-Za-z0-9._-]+)==(?P<version>[0-9A-Za-z._+-]+)"
+    r"(?:;\s*(?P<marker>[^\\\n]+?))?\s*(?:\\)?$"
+)
 _HASH = re.compile(r"--hash=sha256:[0-9a-f]{64}", re.IGNORECASE)
 
 
@@ -80,10 +83,19 @@ def validate_require_hashes_file(path: Path, expected_packages: list[str] | None
 
 
 def test_requirements_file_exists_and_is_hash_pinned():
-    """Validates that root requirements.txt is fully hash-pinned for CI and runtime."""
+    """Validates that root requirements.txt is fully hash-pinned for CI and runtime,
+    including conditional dependencies for Python <3.11 and Windows environments."""
     violations = validate_require_hashes_file(
         REQUIREMENTS_FILE,
-        expected_packages=["httpx", "python-dotenv", "pytest", "pytest-cov"],
+        expected_packages=[
+            "httpx",
+            "python-dotenv",
+            "pytest",
+            "pytest-cov",
+            "exceptiongroup",
+            "tomli",
+            "colorama",
+        ],
     )
     assert not violations, f"requirements.txt has compliance violations: {violations}"
 
@@ -143,3 +155,17 @@ def test_scorecard_pip_download_predicate_satisfaction():
         assert "--require-hashes" in tokens, (
             f"Scorecard token check: {wf_name} command missing --require-hashes token: {cmd}"
         )
+
+
+def test_regeneration_comments_have_valid_syntax():
+    """Ensures regeneration instructions in requirements files do not contain accidental '#' comment markers."""
+    for path in [REQUIREMENTS_FILE, BUILD_REQUIREMENTS_FILE]:
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines()[:15]:
+            if "pip-compile" in line:
+                # Should not have another '#' in the middle of the pip-compile command
+                cmd_part = line.lstrip("#").strip()
+                assert not cmd_part.startswith("pip-compile") or "#" not in cmd_part, (
+                    f"Found stray '#' in pip-compile regeneration command in {path.name}: {line}"
+                )
+

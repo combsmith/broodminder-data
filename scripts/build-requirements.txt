@@ -6,7 +6,8 @@
 #
 # To regenerate from the repo root:
 #   printf 'build==1.6.1\ntwine==7.0.0\n' > /tmp/build.in
-#   pip-compile --generate-hashes --no-annotate --no-header --strip-extras --allow-unsafe #     /tmp/build.in -o scripts/build-requirements.txt
+#   pip-compile --generate-hashes --no-annotate --no-header --strip-extras --allow-unsafe \
+#     /tmp/build.in -o scripts/build-requirements.txt
 #
 # --require-hashes mode requires ALL resolved packages (including transitive
 # dependencies) to be listed here. Generated with pip-compile (pip-tools).
