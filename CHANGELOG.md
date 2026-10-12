@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Expanded `SECURITY.md` with explicit vulnerability disclosure guidelines, GitHub Private Vulnerability Reporting instructions, email fallback, response timelines, and scope to satisfy OpenSSF Scorecard `securityPolicyContainsVulnerabilityDisclosure` probe and achieve a 10/10 security-policy score (#33).
+
 ## [0.1.6] - 2026-10-12
 
 ### Security
