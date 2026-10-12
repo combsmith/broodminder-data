@@ -55,6 +55,19 @@ def test_secret_scan_job_uses_checksum_verified_install():
     assert "fetch-depth: 0" in text, "checkout must fetch full history for a complete scan"
 
 
+def test_secret_scan_downloads_with_insecure_redirects_disabled():
+    """Guard githubactions:S6506 — the gitleaks download must restrict protocols
+    and redirects to HTTPS so a redirect can never downgrade the fetch to an insecure host."""
+    step = re.search(
+        r"(?ms)^      - name: Install gitleaks\n(?P<body>.*?)(?=^      - name: |\Z)",
+        _ci_text(),
+    )
+    assert step, "ci.yml must define the Install gitleaks step"
+    body = step.group("body")
+    assert "--proto '=https'" in body, "gitleaks download must enforce HTTPS protocol (--proto '=https')"
+    assert "--proto-redir '=https'" in body, "gitleaks download must enforce HTTPS redirects (--proto-redir '=https')"
+
+
 def test_gitleaks_config_present():
     assert GITLEAKS_CONFIG.exists(), ".gitleaks.toml must exist at the repo root"
     text = GITLEAKS_CONFIG.read_text()

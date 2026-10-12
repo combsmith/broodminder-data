@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Hardened GitHub Actions CI workflow: switched gitleaks download to `curl` with strict protocol and redirect restrictions (`--proto '=https' --proto-redir '=https'`) to disable insecure redirect downgrades (guarding S6506), and disabled credential persistence on repository checkouts (#23).
+
 ## [0.1.5] - 2026-10-11
 
 ### Added
