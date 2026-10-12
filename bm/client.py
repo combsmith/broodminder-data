@@ -21,7 +21,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal, overload
 
 import httpx
 
@@ -121,6 +121,21 @@ class BroodMinderClient:
         return self.get_json(
             f"/user/hive/{hive_id}/readings", {"start": int(start), "end": int(end)}
         )
+
+    @overload
+    def hive_notes(
+        self, hive_id: str | int, start: int, end: int, *, raw: Literal[False] = False
+    ) -> list[dict[str, Any]]: ...
+
+    @overload
+    def hive_notes(
+        self, hive_id: str | int, start: int, end: int, *, raw: Literal[True]
+    ) -> Any: ...
+
+    @overload
+    def hive_notes(
+        self, hive_id: str | int, start: int, end: int, *, raw: bool
+    ) -> Any: ...
 
     def hive_notes(
         self, hive_id: str | int, start: int, end: int, *, raw: bool = False
