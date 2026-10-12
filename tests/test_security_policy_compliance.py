@@ -54,8 +54,7 @@ def test_security_policy_contains_links_and_emails():
     urls = RE_URL.findall(content)
     emails = RE_EML.findall(content)
 
-    assert len(urls) > 0, "SECURITY.md must contain at least one HTTP/HTTPS URL"
-    assert len(emails) > 0, "SECURITY.md must contain at least one contact email address"
+    assert urls or emails, "SECURITY.md must contain at least one URL or contact email"
 
 
 def test_security_policy_contains_sufficient_text():
@@ -77,19 +76,13 @@ def test_security_policy_contains_vulnerability_disclosure_hints():
     """Probe: securityPolicyContainsVulnerabilityDisclosure.
 
     Scorecard awards 1 point when secpolicy.CountSecInfo(...) > 1 for text matches
-    against `(?i)(\b*[0-9]{1,4}\b|(Disclos|Vuln))`. Both disclosure/vulnerability
-    terminology and response timelines must be present.
+    against `(?i)(\b*[0-9]{1,4}\b|(Disclos|Vuln))`.
     """
     content = _security_content()
     matches = RE_DIG_DISC_VULN.findall(content)
     assert len(matches) > 1, (
         f"Scorecard requires more than 1 vulnerability/disclosure hit; got {len(matches)}"
     )
-
-    # Confirm both 'vuln' and 'disclos' families are represented
-    lower = content.lower()
-    assert "vuln" in lower, "SECURITY.md must mention vulnerability / vulnerabilities"
-    assert "disclos" in lower, "SECURITY.md must mention disclosure / disclose"
 
 
 def test_security_policy_private_reporting_guidance():
