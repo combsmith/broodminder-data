@@ -32,9 +32,9 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 
 _PIN_LINE = re.compile(
     r"^(?P<name>[A-Za-z0-9._-]+)==(?P<version>[0-9A-Za-z._+-]+)"
-    r"(?:;\s*(?P<marker>[^\\\n]+?))?\s*(?:\\)?$"
+    r"(?:;\s*(?P<marker>[^#\\\n]+?))?\s*(?:\\)?$"
 )
-_HASH = re.compile(r"--hash=sha256:[0-9a-f]{64}", re.IGNORECASE)
+_HASH_OPTION = re.compile(r"^--hash=sha256:[0-9a-f]{64}\s*(?:\\)?$", re.IGNORECASE)
 
 
 def validate_require_hashes_file(path: Path, expected_packages: list[str] | None = None) -> list[str]:
@@ -56,7 +56,7 @@ def validate_require_hashes_file(path: Path, expected_packages: list[str] | None
         m = _PIN_LINE.match(line)
         if m:
             blocks.append((m.group("name"), [line]))
-        elif line.startswith("--hash"):
+        elif _HASH_OPTION.match(line):
             if blocks:
                 blocks[-1][1].append(line)
             else:
@@ -76,7 +76,8 @@ def validate_require_hashes_file(path: Path, expected_packages: list[str] | None
                 violations.append(f"missing expected package {pkg!r} in {path.name}")
 
     for name, lines in blocks:
-        if not any(_HASH.search(ln) for ln in lines):
+        hashes = [ln for ln in lines[1:] if _HASH_OPTION.match(ln)]
+        if not hashes:
             violations.append(f"requirement {name!r} in {path.name} is missing a --hash=sha256 entry")
 
     return violations
@@ -104,7 +105,7 @@ def test_build_requirements_file_exists_and_is_hash_pinned():
     """Validates that scripts/build-requirements.txt exists and is hash-pinned."""
     violations = validate_require_hashes_file(
         BUILD_REQUIREMENTS_FILE,
-        expected_packages=["build", "twine"],
+        expected_packages=["build", "twine", "setuptools", "wheel"],
     )
     assert not violations, f"scripts/build-requirements.txt has violations: {violations}"
 
@@ -168,4 +169,32 @@ def test_regeneration_comments_have_valid_syntax():
                 assert not cmd_part.startswith("pip-compile") or "#" not in cmd_part, (
                     f"Found stray '#' in pip-compile regeneration command in {path.name}: {line}"
                 )
+
+
+def test_validation_rejects_comment_only_hashes_and_invalid_lines(tmp_path: Path):
+    """Ensures requirements with hashes only in comments or invalid syntax are rejected."""
+    comment_hash_file = tmp_path / "comment_hash.txt"
+    comment_hash_file.write_text(
+        "pkg==1.0 # --hash=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+        encoding="utf-8",
+    )
+    violations = validate_require_hashes_file(comment_hash_file)
+    assert any("unpinned or invalid line" in v for v in violations)
+
+    continuation_comment_file = tmp_path / "cont_comment.txt"
+    continuation_comment_file.write_text(
+        "pkg==1.0 \\\n  # --hash=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+        encoding="utf-8",
+    )
+    violations = validate_require_hashes_file(continuation_comment_file)
+    assert any("missing a --hash=sha256 entry" in v for v in violations)
+
+    trailing_junk_file = tmp_path / "trailing_junk.txt"
+    trailing_junk_file.write_text(
+        "pkg==1.0 \\\n  --hash=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef invalid_junk\n",
+        encoding="utf-8",
+    )
+    violations = validate_require_hashes_file(trailing_junk_file)
+    assert any("unpinned or invalid line" in v for v in violations)
+
 

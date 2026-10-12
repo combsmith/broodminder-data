@@ -144,7 +144,7 @@ jobs:
           pip install -r scripts/build-requirements.txt --require-hashes --only-binary :all:
 
       - name: Build sdist and wheel
-        run: python -m build
+        run: python -m build --no-isolation
 
       - name: Verify package metadata with twine
         run: twine check --strict dist/*
