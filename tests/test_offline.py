@@ -119,6 +119,7 @@ def test_known_metric_keys_stability():
 
 
 def test_client_init_requires_key(monkeypatch):
+    """Verify BroodMinderClient raises BroodMinderError when BROODMINDER_API_KEY is not set."""
     monkeypatch.delenv("BROODMINDER_API_KEY", raising=False)
     with pytest.raises(BroodMinderError) as exc_info:
         BroodMinderClient(api_key=None)
@@ -126,6 +127,7 @@ def test_client_init_requires_key(monkeypatch):
 
 
 def test_client_hive_notes_normalization(monkeypatch):
+    """Verify BroodMinderClient.hive_notes normalizes payloads and raw option preserves wire envelope."""
     client = BroodMinderClient(api_key="test-key")
     sample_notes = [
         {
@@ -369,6 +371,7 @@ def test_flatten_atomic_interruption_preserves_existing_targets(tmp_path, monkey
 
 
 def test_extract_all_catchup_roster_check(tmp_path, monkeypatch, capsys):
+    """Verify extract_all catchup correctly inspects manifest rosters without redundant fetches."""
     import scripts.extract_all as ex
 
     out_dir = tmp_path / "extract"
@@ -386,24 +389,30 @@ def test_extract_all_catchup_roster_check(tmp_path, monkeypatch, capsys):
 
     class MockClient:
         def __init__(self):
+            """Initialize mock client."""
             self.call_count = 0
 
         def __enter__(self):
+            """Enter context manager."""
             return self
 
         def __exit__(self, *args):
+            """Exit context manager."""
             pass
 
         def apiaries(self):
+            """Return mock apiary topology."""
             calls["apiaries"] += 1
             return [{"apiaryId": "a1", "name": "Apiary 1",
                      "hives": [{"hiveId": "h1", "name": "H1"}, {"hiveId": "h2", "name": "H2"}]}]
 
         def hive_readings(self, hid, s, e):
+            """Return mock readings."""
             calls["readings"] += 1
             return []
 
         def hive_notes(self, hid, s, e, *args, **kwargs):
+            """Return mock notes."""
             return []
 
     monkeypatch.setattr(ex, "BroodMinderClient", MockClient)
@@ -421,6 +430,7 @@ def test_extract_all_catchup_roster_check(tmp_path, monkeypatch, capsys):
     # Case 2: New hive added to account -> not up to date, extracts the new hive
     class MockClientWithNewHive(MockClient):
         def apiaries(self):
+            """Return mock apiaries with an additional hive."""
             calls["apiaries"] += 1
             return [{"apiaryId": "a1", "name": "Apiary 1",
                      "hives": [{"hiveId": "h1", "name": "H1"},

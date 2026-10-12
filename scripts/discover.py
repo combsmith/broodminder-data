@@ -72,6 +72,7 @@ def _sample(out, label, fetch, ok_key, err_key, err_msg, limit):
 
 
 def main() -> int:
+    """Run discovery probe against BroodMinder API and write data/discovery.json."""
     out: dict = {}
     try:
         bm_client = BroodMinderClient()

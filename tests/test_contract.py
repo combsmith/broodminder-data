@@ -107,6 +107,7 @@ def test_hive_readings_timestamps_in_window(client, sample_hive_id, recent_windo
 # /user/hive/{id}/notes
 # --------------------------------------------------------------------------
 def test_hive_notes_shape(client, sample_hive_id, recent_window):
+    """Verify live GET /user/hive/{id}/notes raw wire shape and SDK normalization."""
     start, end = recent_window
     raw_payload = client.hive_notes_raw(sample_hive_id, start, end)
     if isinstance(raw_payload, list):
