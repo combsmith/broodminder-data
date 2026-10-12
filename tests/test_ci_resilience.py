@@ -77,20 +77,20 @@ def test_pip_install_step_retries():
 
 def test_gitleaks_download_step_retries():
     block = _step_containing(_ci_text(), "gitleaks.tar.gz")
-    assert "wget" in block, "gitleaks install step must download the release tarball with wget"
+    assert "curl" in block or "wget" in block, "gitleaks install step must download the release tarball"
     assert _has_retry_loop(block), (
         "the `Install gitleaks` step must retry the release download with backoff so a "
         "transient GitHub-Releases/CDN failure doesn't fail CI"
     )
-    # Verify the retry loop is bounded to exactly 3 attempts (not combined with wget's --tries).
+    # Verify the retry loop is bounded to exactly 3 attempts (not combined with nested retries).
     assert "for attempt in 1 2 3" in block, (
         "the `Install gitleaks` step must use `for attempt in 1 2 3` to bound retries to 3 total attempts"
     )
-    # Verify wget uses --tries=1 so the loop controls all retries (no nested retry logic).
-    assert "--tries=1" in block, (
-        "wget invocation must use --tries=1 to limit each attempt to a single try, "
-        "letting the outer loop manage all retries"
-    )
+    if "wget" in block:
+        assert "--tries=1" in block, (
+            "wget invocation must use --tries=1 to limit each attempt to a single try, "
+            "letting the outer loop manage all retries"
+        )
     # Retry must not weaken supply-chain safety: the checksum is still verified.
     assert "sha256sum -c" in block, "gitleaks download must still verify the checksum after retrying"
 
@@ -106,12 +106,12 @@ def test_network_steps_still_run_underlying_commands():
     )
     gitleaks_block = _step_containing(text, "gitleaks.tar.gz")
     gitleaks_run = "\n".join(ln for ln in gitleaks_block.splitlines() if not ln.lstrip().startswith("#"))
-    assert "wget" in gitleaks_run, (
-        "the `Install gitleaks` step must execute `wget` to download `gitleaks.tar.gz` "
+    assert "curl" in gitleaks_run or "wget" in gitleaks_run, (
+        "the `Install gitleaks` step must execute `curl` or `wget` to download `gitleaks.tar.gz` "
         "(not just reference them in comments)"
     )
     assert "gitleaks.tar.gz" in gitleaks_run, (
-        "the `Install gitleaks` step must execute `wget` to download `gitleaks.tar.gz` "
+        "the `Install gitleaks` step must download `gitleaks.tar.gz` "
         "(not just reference them in comments)"
     )
 

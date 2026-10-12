@@ -56,12 +56,12 @@ def test_secret_scan_job_uses_checksum_verified_install():
 
 
 def test_secret_scan_downloads_with_insecure_redirects_disabled():
-    """Guard githubactions:S6506 — the gitleaks download must restrict redirects
-    to HTTPS so a redirect can never downgrade the fetch to an insecure host."""
+    """Guard githubactions:S6506 — the gitleaks download must restrict protocols
+    and redirects to HTTPS so a redirect can never downgrade the fetch to an insecure host."""
     text = _ci_text()
     assert (
-        "--https-only" in text or "--proto-redir '=https'" in text
-    ), "gitleaks download must disable insecure redirects (--https-only)"
+        "--proto '=https'" in text and "--proto-redir '=https'" in text
+    ), "gitleaks download must enforce HTTPS protocol and redirects (--proto '=https' --proto-redir '=https')"
 
 
 def test_gitleaks_config_present():

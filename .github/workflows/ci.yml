@@ -91,7 +91,7 @@ jobs:
           url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
           # Retry with backoff so a transient GitHub-Releases/CDN failure doesn't fail CI.
           for attempt in 1 2 3; do
-            if wget --https-only -q --tries=1 --timeout=30 --retry-connrefused "${url}" -O /tmp/gitleaks.tar.gz; then
+            if curl -fsSL --connect-timeout 30 --max-time 150 --proto '=https' --proto-redir '=https' "${url}" -o /tmp/gitleaks.tar.gz; then
               break
             fi
             if [ "${attempt}" -eq 3 ]; then
