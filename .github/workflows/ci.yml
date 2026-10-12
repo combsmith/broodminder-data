@@ -34,6 +34,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -76,6 +78,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install gitleaks
         env:
@@ -88,7 +91,7 @@ jobs:
           url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
           # Retry with backoff so a transient GitHub-Releases/CDN failure doesn't fail CI.
           for attempt in 1 2 3; do
-            if wget -q --tries=1 --timeout=30 --retry-connrefused "${url}" -O /tmp/gitleaks.tar.gz; then
+            if wget --https-only -q --tries=1 --timeout=30 --retry-connrefused "${url}" -O /tmp/gitleaks.tar.gz; then
               break
             fi
             if [ "${attempt}" -eq 3 ]; then
