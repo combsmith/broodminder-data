@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-12
+
 ### Security
 - Hardened GitHub Actions CI workflow: switched gitleaks download to `curl` with strict protocol and redirect restrictions (`--proto '=https' --proto-redir '=https'`) to disable insecure redirect downgrades (guarding S6506), and disabled credential persistence on repository checkouts (#23).
 
@@ -63,7 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Authoritative OpenAPI 3.1 specification for the External User API (`openapi/broodminder-openapi.yaml`) with Redocly linting and interactive docs preview.
 - PyPI onboarding probe, build verification, and Trusted Publishing OIDC workflow.
 
-[Unreleased]: https://github.com/petry-projects/broodminder-data/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/petry-projects/broodminder-data/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/petry-projects/broodminder-data/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/petry-projects/broodminder-data/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/petry-projects/broodminder-data/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/petry-projects/broodminder-data/compare/v0.1.2...v0.1.3
