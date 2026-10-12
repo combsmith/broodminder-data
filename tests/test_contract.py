@@ -123,10 +123,8 @@ def test_hive_notes_shape(client, sample_hive_id, recent_window):
     else:
         raise AssertionError(f"unexpected raw notes wire shape: {type(raw_payload)}")
 
-    # Also verify SDK normalization behaves consistently
-    normalized = client.hive_notes(sample_hive_id, start, end)
-    assert isinstance(normalized, list)
-    assert normalized == notes
+    # SDK normalization is covered offline in tests/test_offline.py; avoid a
+    # second live request whose result could differ from raw_payload.
 
     for n in notes:
         assert "description" in n or "note" in n
