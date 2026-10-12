@@ -72,6 +72,7 @@ def _sample(out, label, fetch, ok_key, err_key, err_msg, limit):
 
 
 def main() -> int:
+    """Run discovery probe against BroodMinder API and write data/discovery.json."""
     out: dict = {}
     try:
         bm_client = BroodMinderClient()
@@ -101,7 +102,7 @@ def main() -> int:
                     "hive_readings_sample", "hive_readings_error",
                     "hive readings error", 2500)
             _sample(out, f"→ GET /user/hive/{hive_id}/notes (last 30d)",
-                    lambda: bm.hive_notes(hive_id, start, end),
+                    lambda: bm.hive_notes(hive_id, start, end, raw=True),
                     "hive_notes_sample", "hive_notes_error",
                     "hive notes error", 1500)
 

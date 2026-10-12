@@ -119,10 +119,53 @@ def test_known_metric_keys_stability():
 
 
 def test_client_init_requires_key(monkeypatch):
+    """Verify BroodMinderClient raises BroodMinderError when BROODMINDER_API_KEY is not set."""
     monkeypatch.delenv("BROODMINDER_API_KEY", raising=False)
     with pytest.raises(BroodMinderError) as exc_info:
         BroodMinderClient(api_key=None)
     assert "BROODMINDER_API_KEY not set" in str(exc_info.value)
+
+
+def test_client_hive_notes_normalization(monkeypatch):
+    """Verify BroodMinderClient.hive_notes normalizes payloads and raw option preserves wire envelope."""
+    client = BroodMinderClient(api_key="test-key")
+    sample_notes = [
+        {
+            "id": "note-1",
+            "hiveId": "h1",
+            "description": "Added winter feed block",
+            "tags": [{"id": "tag-1", "name": "Feeding"}],
+            "timestamp": 1700000000,
+            "created": 1700000050,
+        }
+    ]
+
+    # Case 1: Bare array returned by API (e.g. empty or legacy)
+    monkeypatch.setattr(client, "get_json", lambda path, params: sample_notes)
+    assert client.hive_notes("h1", 1000, 2000) == sample_notes
+
+    # Case 2: Dict wrapper {"notes": [...]} returned when notes exist
+    monkeypatch.setattr(client, "get_json", lambda path, params: {"notes": sample_notes})
+    assert client.hive_notes("h1", 1000, 2000) == sample_notes
+
+    # Case 3: Empty bare list returned when no notes exist
+    monkeypatch.setattr(client, "get_json", lambda path, params: [])
+    assert client.hive_notes("h1", 1000, 2000) == []
+
+    # Case 4: Dict with empty notes list
+    monkeypatch.setattr(client, "get_json", lambda path, params: {"notes": []})
+    assert client.hive_notes("h1", 1000, 2000) == []
+
+    # Case 5: None or unexpected payload falls back safely to empty list
+    monkeypatch.setattr(client, "get_json", lambda path, params: None)
+    assert client.hive_notes("h1", 1000, 2000) == []
+
+    # Case 6: raw=True preserves the wire envelope losslessly
+    monkeypatch.setattr(client, "get_json", lambda path, params: {"notes": sample_notes})
+    assert client.hive_notes("h1", 1000, 2000, raw=True) == {"notes": sample_notes}
+
+    # Case 7: hive_notes_raw convenience alias returns exact wire payload
+    assert client.hive_notes_raw("h1", 1000, 2000) == {"notes": sample_notes}
 
 
 def test_flatten_merge_deduplication(tmp_path, monkeypatch):
@@ -328,6 +371,7 @@ def test_flatten_atomic_interruption_preserves_existing_targets(tmp_path, monkey
 
 
 def test_extract_all_catchup_roster_check(tmp_path, monkeypatch, capsys):
+    """Verify extract_all catchup correctly inspects manifest rosters without redundant fetches."""
     import scripts.extract_all as ex
 
     out_dir = tmp_path / "extract"
@@ -345,24 +389,30 @@ def test_extract_all_catchup_roster_check(tmp_path, monkeypatch, capsys):
 
     class MockClient:
         def __init__(self):
+            """Initialize mock client."""
             self.call_count = 0
 
         def __enter__(self):
+            """Enter context manager."""
             return self
 
         def __exit__(self, *args):
+            """Exit context manager."""
             pass
 
         def apiaries(self):
+            """Return mock apiary topology."""
             calls["apiaries"] += 1
             return [{"apiaryId": "a1", "name": "Apiary 1",
                      "hives": [{"hiveId": "h1", "name": "H1"}, {"hiveId": "h2", "name": "H2"}]}]
 
         def hive_readings(self, hid, s, e):
+            """Return mock readings."""
             calls["readings"] += 1
             return []
 
-        def hive_notes(self, hid, s, e):
+        def hive_notes(self, hid, s, e, *args, **kwargs):
+            """Return mock notes."""
             return []
 
     monkeypatch.setattr(ex, "BroodMinderClient", MockClient)
@@ -380,6 +430,7 @@ def test_extract_all_catchup_roster_check(tmp_path, monkeypatch, capsys):
     # Case 2: New hive added to account -> not up to date, extracts the new hive
     class MockClientWithNewHive(MockClient):
         def apiaries(self):
+            """Return mock apiaries with an additional hive."""
             calls["apiaries"] += 1
             return [{"apiaryId": "a1", "name": "Apiary 1",
                      "hives": [{"hiveId": "h1", "name": "H1"},

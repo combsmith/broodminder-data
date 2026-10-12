@@ -21,7 +21,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal, overload
 
 import httpx
 
@@ -122,11 +122,48 @@ class BroodMinderClient:
             f"/user/hive/{hive_id}/readings", {"start": int(start), "end": int(end)}
         )
 
-    def hive_notes(self, hive_id: str | int, start: int, end: int) -> Any:
-        """GET /user/hive/{id}/notes — hive notes in window."""
-        return self.get_json(
+    @overload
+    def hive_notes(
+        self, hive_id: str | int, start: int, end: int, *, raw: Literal[False] = False
+    ) -> list[dict[str, Any]]: ...
+
+    @overload
+    def hive_notes(
+        self, hive_id: str | int, start: int, end: int, *, raw: Literal[True]
+    ) -> Any: ...
+
+    @overload
+    def hive_notes(
+        self, hive_id: str | int, start: int, end: int, *, raw: bool
+    ) -> Any: ...
+
+    def hive_notes(
+        self, hive_id: str | int, start: int, end: int, *, raw: bool = False
+    ) -> Any:
+        """GET /user/hive/{id}/notes — hive notes in window.
+
+        By default, normalizes the response to always return a list of note
+        dictionaries, handling both the empty bare array ``[]`` and the populated
+        object wrapper ``{"notes": [...]}`` returned by the API.
+
+        Pass ``raw=True`` to retrieve the exact wire payload as returned by the API
+        (useful for lossless archiving).
+        """
+        payload = self.get_json(
             f"/user/hive/{hive_id}/notes", {"start": int(start), "end": int(end)}
         )
+        if raw:
+            return payload
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            notes = payload.get("notes")
+            return notes if isinstance(notes, list) else []
+        return []
+
+    def hive_notes_raw(self, hive_id: str | int, start: int, end: int) -> Any:
+        """GET /user/hive/{id}/notes — raw wire response JSON without normalization."""
+        return self.hive_notes(hive_id, start, end, raw=True)
 
     def device_readings(self, device_id: str | int, start: int, end: int) -> Any:
         """GET /user/device/{id}/readings — single-device sensor readings."""
