@@ -68,12 +68,12 @@ def iter_readings(hdir: Path):
                 yield pid, r
 
 
-def discover_metric_keys(raw: Path) -> set[str]:
+def discover_metric_keys(raw: Path, only_hives: set | None = None) -> set[str]:
     """Pass 1: scan every reading for its metric names so the CSV header is
     stable and fixed before any rows are streamed."""
     metric_keys: set[str] = set()
     for hdir in sorted(raw.iterdir()):
-        if not hdir.is_dir():
+        if not hdir.is_dir() or (only_hives is not None and hdir.name not in only_hives):
             continue
         for _pid, r in iter_readings(hdir):
             metric_keys.update((r.get("readings") or {}).keys())
@@ -218,11 +218,11 @@ def _existing_metric_keys(target_ndjson: Path) -> set[str]:
     return keys
 
 
-def _collect_metric_keys(args, target_ndjson: Path) -> set[str]:
+def _collect_metric_keys(args, target_ndjson: Path, meta: dict) -> set[str]:
     """Pass 1: discover metric keys, unioned with KNOWN_METRIC_KEYS for fixed header stability."""
     metric_keys: set[str] = set(KNOWN_METRIC_KEYS)
     if RAW.exists() and not args.no_csv:
-        metric_keys.update(discover_metric_keys(RAW))
+        metric_keys.update(discover_metric_keys(RAW, set(meta) if args.completed_only else None))
     # In merge mode, include any existing m_* metrics already in the archive
     # so historical fields remain in the rebuilt CSV even if raw files were purged.
     if args.merge and _has_content(target_ndjson):
@@ -347,7 +347,7 @@ def main() -> int:
     target_csv = OUT / "readings.csv.gz"
     target_notes = OUT / "notes.ndjson"
 
-    metric_keys = _collect_metric_keys(args, target_ndjson)
+    metric_keys = _collect_metric_keys(args, target_ndjson, meta)
     metric_cols = [f"m_{k}" for k in sorted(metric_keys)]
 
     sink = _write_readings(args, meta, metric_cols, target_ndjson, target_csv)
