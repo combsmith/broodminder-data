@@ -68,12 +68,12 @@ def iter_readings(hdir: Path):
                 yield pid, r
 
 
-def discover_metric_keys(raw: Path) -> set[str]:
+def discover_metric_keys(raw: Path, only_hives: set | None = None) -> set[str]:
     """Pass 1: scan every reading for its metric names so the CSV header is
     stable and fixed before any rows are streamed."""
     metric_keys: set[str] = set()
     for hdir in sorted(raw.iterdir()):
-        if not hdir.is_dir():
+        if not hdir.is_dir() or (only_hives is not None and hdir.name not in only_hives):
             continue
         for _pid, r in iter_readings(hdir):
             metric_keys.update((r.get("readings") or {}).keys())
@@ -191,11 +191,11 @@ def build_coverage(coverage: dict, meta: dict) -> dict:
     return cov_out
 
 
-def collect_metric_keys(args, target_ndjson: Path) -> set:
+def collect_metric_keys(args, target_ndjson: Path, meta: dict) -> set:
     """Known metrics, unioned with raw discoveries and (in merge mode) m_* keys already archived."""
     metric_keys: set[str] = set(KNOWN_METRIC_KEYS)
     if RAW.exists() and not args.no_csv:
-        metric_keys.update(discover_metric_keys(RAW))
+        metric_keys.update(discover_metric_keys(RAW, set(meta) if args.completed_only else None))
     if args.merge and _nonempty(target_ndjson):
         with gzip.open(target_ndjson, "rt", encoding="utf-8") as in_fh:
             for line in in_fh:
@@ -263,7 +263,7 @@ def main() -> int:
     target_csv = OUT / "readings.csv.gz"
     target_notes = OUT / "notes.ndjson"
 
-    metric_keys = collect_metric_keys(args, target_ndjson)
+    metric_keys = collect_metric_keys(args, target_ndjson, meta)
 
     metric_cols = [f"m_{k}" for k in sorted(metric_keys)]
 
