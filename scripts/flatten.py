@@ -30,7 +30,7 @@ OUT = ROOT / "data" / "extract"
 RAW = OUT / "raw"
 
 
-def load_json(path: Path):
+def load_json(path: Path) -> Any:
     if path.suffix == ".gz":
         with gzip.open(path, "rt", encoding="utf-8") as fh:
             return json.load(fh)
@@ -60,15 +60,15 @@ def _window_ok(f: Path, allowed: set | None) -> bool:
     return allowed is None or f.name.split(".", 1)[0] in allowed
 
 
-def iter_reading_files(hdir: Path, allowed: set | None = None):
+def iter_reading_files(hdir: Path, allowed: set | None = None) -> list[Path]:
     """Readings windows for a hive, gz or plain; optionally only the completed windows."""
     files = sorted(list(hdir.glob("*.readings.json")) + list(hdir.glob("*.readings.json.gz")))
-    yield from (f for f in files if _window_ok(f, allowed))
+    return [f for f in files if _window_ok(f, allowed)]
 
 
-def iter_note_files(hdir: Path, allowed: set | None = None):
+def iter_note_files(hdir: Path, allowed: set | None = None) -> list[Path]:
     files = sorted(list(hdir.glob("*.notes.json")) + list(hdir.glob("*.notes.json.gz")))
-    yield from (f for f in files if _window_ok(f, allowed))
+    return [f for f in files if _window_ok(f, allowed)]
 
 
 # Baseline of known metrics observed in production to guarantee a fixed CSV header.
@@ -78,9 +78,9 @@ KNOWN_METRIC_KEYS = {"audio", "humidity", "radar", "swarmState", "temperature", 
 def iter_readings(hdir: Path, allowed: set | None = None):
     """Yield (positionID, reading) for every reading row in a hive dir."""
     for f in iter_reading_files(hdir, allowed):
-        for pos in load_json(f) or []:
+        for pos in (load_json(f) or []):
             pid = pos.get("positionID")
-            for r in pos.get("readings", []) or []:
+            for r in (pos.get("readings", []) or []):
                 yield pid, r
 
 
@@ -97,7 +97,7 @@ def discover_metric_keys(raw: Path, only_hives: set | None = None, windows: dict
     return metric_keys
 
 
-def build_row(hid: str, m: dict, pid, r: dict) -> dict:
+def build_row(hid: str, m: dict, pid: Any, r: dict) -> dict:
     """Project one raw reading into a flat output row (metrics get an m_ prefix)."""
     ts = r.get("timestamp")
     metrics = r.get("readings") or {}
@@ -113,7 +113,7 @@ def build_row(hid: str, m: dict, pid, r: dict) -> dict:
     }
 
 
-def iter_hive_rows(hdir: Path, m: dict, seen: set | None = None, allowed: set | None = None):
+def iter_hive_rows(hdir: Path, m: dict, seen: set | None = None, allowed: set | None = None) -> Any:
     """Yield deduped rows for one hive dir. Overlapping/re-fetched windows can
     repeat the same (position, device, timestamp); dedupe within the hive
     (reset per hive to bound memory)."""
