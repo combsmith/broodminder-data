@@ -49,7 +49,7 @@ jobs:
         # Retry with backoff so a transient PyPI/network hiccup doesn't fail the scan.
         run: |
           for attempt in 1 2 3; do
-            if pip install -r requirements.txt; then
+            if pip install -r requirements.txt --require-hashes --only-binary :all:; then
               exit 0
             fi
             if [ "${attempt}" -eq 3 ]; then
