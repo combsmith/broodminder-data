@@ -83,12 +83,16 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
     res: list[str] = []
     while i < n:
         if pattern[i:i + 4] == "/**/":
+            while pattern[i:i + 4] == "/**/":
+                i += 4
+            while pattern[i:i + 3] == "**/":
+                i += 3
             res.append("/(?:.+/)?")
-            i += 4
             continue
         if i == 0 and pattern[i:i + 3] == "**/":
+            while pattern[i:i + 3] == "**/":
+                i += 3
             res.append("(?:.+/)?")
-            i += 3
             continue
         if pattern[i:i + 2] == "**":
             res.append("[^/]*")
@@ -430,6 +434,53 @@ def test_ruleset_targets_default_branch_zero_directory_wildcard_inclusion():
     assert ruleset_targets_default_branch(rs_zero_dir_include) is True
 
 
+def test_ruleset_targets_default_branch_consecutive_recursive_wildcards():
+    """Verify consecutive **/ segments collapse into recursive directory matching."""
+    rs_consecutive_wildcard = {
+        "target": "branch",
+        "conditions": {
+            "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/**/**/main"]}
+        },
+    }
+    rs_consecutive_leading = {
+        "target": "branch",
+        "conditions": {
+            "ref_name": {"include": ["**/**/main"], "exclude": []}
+        },
+    }
+    assert ruleset_targets_default_branch(rs_consecutive_wildcard) is False
+    assert ruleset_targets_default_branch(rs_consecutive_leading) is True
+
+
+def test_evaluate_scorecard_tier1_compliance_multiple_same_named_rulesets():
+    """Verify evaluation succeeds when an active ruleset satisfies protection despite an inactive duplicate."""
+    rulesets = [
+        {
+            "name": RULESET_NAME,
+            "target": "branch",
+            "enforcement": "disabled",
+            "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+            "rules": [
+                {"type": "pull_request"},
+            ],
+        },
+        {
+            "name": RULESET_NAME,
+            "target": "branch",
+            "enforcement": "active",
+            "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+            "rules": [
+                {"type": "pull_request"},
+                {"type": "deletion"},
+                {"type": "non_fast_forward"},
+            ],
+        },
+    ]
+    compliant, missing = evaluate_scorecard_tier1_compliance(rulesets)
+    assert compliant is True
+    assert missing == []
+
+
 def test_evaluate_scorecard_tier1_compliance_success():
     """Verify evaluation succeeds when all required Tier 1 rules are present on active ruleset."""
     rulesets = [
@@ -549,12 +600,12 @@ def test_branch_protection_tier1_rules_live():
     assert isinstance(repo_meta, dict), f"unexpected repo metadata format: {type(repo_meta).__name__}"
     default_branch = repo_meta.get("default_branch", "main")
 
-    # Follow Link header pagination across all pages to locate RULESET_NAME
-    matching_ruleset = None
+    # Follow Link header pagination across all pages to collect all candidate rulesets matching RULESET_NAME
+    matching_rulesets = []
     next_url: str | None = f"https://api.github.com/repos/{REPO_SLUG}/rulesets"
     request_params: dict = {"per_page": 100}
 
-    while next_url is not None and matching_ruleset is None:
+    while next_url is not None:
         listing = httpx.get(
             next_url,
             headers=headers,
@@ -571,12 +622,11 @@ def test_branch_protection_tier1_rules_live():
             f"(expected list, got {type(listing_data).__name__})"
         )
 
-        matching_ruleset = next(
-            (r for r in listing_data if isinstance(r, dict) and r.get("name") == RULESET_NAME),
-            None,
-        )
+        for r in listing_data:
+            if isinstance(r, dict) and r.get("name") == RULESET_NAME:
+                matching_rulesets.append(r)
 
-        # Advance to the next page (Link header) unless the ruleset was already found.
+        # Advance to the next page (Link header)
         link_header = listing.headers.get("Link", "")
         next_url = None
         request_params = {}
@@ -588,41 +638,63 @@ def test_branch_protection_tier1_rules_live():
                     next_url = url_part[1:-1]
                     break
 
-    assert matching_ruleset is not None, (
-        f"repository must define the `{RULESET_NAME}` ruleset (org rulesets standard)"
+    assert len(matching_rulesets) > 0, (
+        f"repository must define or inherit the `{RULESET_NAME}` ruleset (org rulesets standard)"
     )
 
-    ruleset_id = matching_ruleset.get("id")
-    assert ruleset_id is not None, f"ruleset '{RULESET_NAME}' found but is missing an 'id' field"
-
-    detail = httpx.get(
-        f"https://api.github.com/repos/{REPO_SLUG}/rulesets/{ruleset_id}",
-        headers=headers,
-        timeout=15,
-    )
-    assert detail.status_code == 200, (
-        f"could not read `{RULESET_NAME}` ruleset detail (HTTP {detail.status_code})"
-    )
-
-    detail_json = detail.json()
-    assert isinstance(detail_json, dict), (
-        f"unexpected detail response format: {type(detail_json).__name__}"
-    )
-
-    # Validate active enforcement, branch target, and branch applicability
-    assert detail_json.get("enforcement", "").lower() == "active", (
-        f"`{RULESET_NAME}` ruleset enforcement must be 'active', got {detail_json.get('enforcement')!r}"
-    )
-    assert detail_json.get("target", "").lower() == "branch", (
-        f"`{RULESET_NAME}` ruleset target must be 'branch', got {detail_json.get('target')!r}"
-    )
-    assert ruleset_targets_default_branch(detail_json, default_branch=default_branch) is True, (
-        f"`{RULESET_NAME}` ruleset must target default branch '{default_branch}' without excluding it"
-    )
-
-    # Validate required Tier 1 rules
-    for rule_type in REQUIRED_RULE_TYPES:
-        assert ruleset_has_rule_type(detail_json, rule_type) is True, (
-            f"Rule `{rule_type}` must be enabled on the `{RULESET_NAME}` ruleset to satisfy "
-            f"OpenSSF Scorecard Branch-Protection Tier 1 requirements (#29)."
+    # Fetch details for all same-named candidate rulesets
+    candidate_details = []
+    for rs in matching_rulesets:
+        rs_id = rs.get("id")
+        assert rs_id is not None, f"candidate ruleset '{RULESET_NAME}' missing 'id' field"
+        detail = httpx.get(
+            f"https://api.github.com/repos/{REPO_SLUG}/rulesets/{rs_id}",
+            headers=headers,
+            timeout=15,
         )
+        assert detail.status_code == 200, (
+            f"could not read `{RULESET_NAME}` ruleset detail for ID {rs_id} (HTTP {detail.status_code})"
+        )
+        detail_json = detail.json()
+        assert isinstance(detail_json, dict), (
+            f"unexpected detail response format: {type(detail_json).__name__}"
+        )
+        candidate_details.append(detail_json)
+
+    # Evaluate all candidates to verify at least one candidate actively protects the default branch with Tier 1 rules
+    compliant_candidate = None
+    candidate_reasons = []
+
+    for detail_json in candidate_details:
+        rs_id = detail_json.get("id")
+        if detail_json.get("enforcement", "").lower() != "active":
+            candidate_reasons.append(
+                f"ID {rs_id}: enforcement is {detail_json.get('enforcement')!r} (expected 'active')"
+            )
+            continue
+        if detail_json.get("target", "").lower() != "branch":
+            candidate_reasons.append(
+                f"ID {rs_id}: target is {detail_json.get('target')!r} (expected 'branch')"
+            )
+            continue
+        if not ruleset_targets_default_branch(detail_json, default_branch=default_branch):
+            candidate_reasons.append(
+                f"ID {rs_id}: does not effectively target default branch '{default_branch}'"
+            )
+            continue
+        missing_rules = [
+            rule_type for rule_type in REQUIRED_RULE_TYPES
+            if not ruleset_has_rule_type(detail_json, rule_type)
+        ]
+        if missing_rules:
+            candidate_reasons.append(
+                f"ID {rs_id}: missing required Tier 1 rule types {missing_rules}"
+            )
+            continue
+        compliant_candidate = detail_json
+        break
+
+    assert compliant_candidate is not None, (
+        f"No active, compliant `{RULESET_NAME}` ruleset found protecting '{default_branch}'. "
+        f"Evaluated candidates: {candidate_reasons}"
+    )
