@@ -135,6 +135,7 @@ def evaluate_scorecard_tier1_compliance(rulesets_json: list[dict]) -> tuple[bool
 
 
 def test_ruleset_has_rule_type_positive():
+    """Verify ruleset_has_rule_type identifies present rules case-insensitively."""
     ruleset = {
         "name": RULESET_NAME,
         "rules": [
@@ -149,6 +150,7 @@ def test_ruleset_has_rule_type_positive():
 
 
 def test_ruleset_has_rule_type_negative():
+    """Verify ruleset_has_rule_type returns False when rule types are missing."""
     ruleset = {
         "name": RULESET_NAME,
         "rules": [
@@ -160,6 +162,7 @@ def test_ruleset_has_rule_type_negative():
 
 
 def test_ruleset_has_rule_type_invalid_payloads():
+    """Verify ruleset_has_rule_type safely fails closed on invalid input types."""
     assert ruleset_has_rule_type({}, "deletion") is False
     assert ruleset_has_rule_type(None, "deletion") is False
     assert ruleset_has_rule_type({"rules": "invalid"}, "deletion") is False
@@ -167,6 +170,7 @@ def test_ruleset_has_rule_type_invalid_payloads():
 
 
 def test_extract_rule_types():
+    """Verify extract_rule_types parses rule types and handles empty payloads."""
     ruleset = {
         "rules": [
             {"type": "pull_request"},
@@ -180,6 +184,7 @@ def test_extract_rule_types():
 
 
 def test_ruleset_targets_default_branch():
+    """Verify ruleset_targets_default_branch identifies default branch targeting conditions."""
     rs_default = {
         "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}}
     }
@@ -200,6 +205,7 @@ def test_ruleset_targets_default_branch():
 
 
 def test_ruleset_targets_default_branch_rejects_excluded_main():
+    """Verify ruleset_targets_default_branch rejects rulesets that explicitly exclude main."""
     rs_excluded_main = {
         "conditions": {
             "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/main"]}
@@ -215,6 +221,7 @@ def test_ruleset_targets_default_branch_rejects_excluded_main():
 
 
 def test_ruleset_targets_default_branch_rejects_fnmatch_pattern_exclusions():
+    """Verify ruleset_targets_default_branch rejects rulesets with fnmatch wildcard exclusions matching main."""
     rs_prefix_wildcard = {
         "conditions": {
             "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/ma*"]}
@@ -236,6 +243,7 @@ def test_ruleset_targets_default_branch_rejects_fnmatch_pattern_exclusions():
 
 
 def test_ruleset_targets_default_branch_accepts_fnmatch_pattern_inclusions():
+    """Verify ruleset_targets_default_branch accepts rulesets with fnmatch wildcard inclusions matching main."""
     rs_prefix_wildcard = {
         "conditions": {
             "ref_name": {"include": ["refs/heads/ma*"], "exclude": []}
@@ -251,6 +259,7 @@ def test_ruleset_targets_default_branch_accepts_fnmatch_pattern_inclusions():
 
 
 def test_evaluate_scorecard_tier1_compliance_success():
+    """Verify evaluation succeeds when all required Tier 1 rules are present on active ruleset."""
     rulesets = [
         {
             "name": RULESET_NAME,
@@ -269,6 +278,7 @@ def test_evaluate_scorecard_tier1_compliance_success():
 
 
 def test_evaluate_scorecard_tier1_compliance_missing_deletion():
+    """Verify evaluation reports missing 'deletion' rule when omitted."""
     rulesets = [
         {
             "name": RULESET_NAME,
@@ -286,6 +296,7 @@ def test_evaluate_scorecard_tier1_compliance_missing_deletion():
 
 
 def test_evaluate_scorecard_tier1_compliance_missing_non_fast_forward():
+    """Verify evaluation reports missing 'non_fast_forward' rule when omitted."""
     rulesets = [
         {
             "name": RULESET_NAME,
@@ -303,6 +314,7 @@ def test_evaluate_scorecard_tier1_compliance_missing_non_fast_forward():
 
 
 def test_evaluate_scorecard_tier1_compliance_inactive_ruleset():
+    """Verify evaluation fails when ruleset enforcement is disabled."""
     rulesets = [
         {
             "name": RULESET_NAME,
@@ -320,6 +332,7 @@ def test_evaluate_scorecard_tier1_compliance_inactive_ruleset():
 
 
 def test_evaluate_scorecard_tier1_compliance_empty():
+    """Verify evaluation handles empty ruleset listings gracefully."""
     compliant, missing = evaluate_scorecard_tier1_compliance([])
     assert compliant is False
     assert missing == ["deletion", "non_fast_forward"]
@@ -329,10 +342,12 @@ def test_evaluate_scorecard_tier1_compliance_empty():
 
 
 def _github_token() -> str | None:
+    """Retrieve GitHub token from GH_TOKEN or GITHUB_TOKEN environment variables."""
     return os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
 
 
 def test_branch_protection_tier1_rules_live():
+    """Verify live GitHub ruleset defines active Tier 1 deletion and non_fast_forward rules."""
     token = _github_token()
     if not token:
         pytest.skip("no GH_TOKEN/GITHUB_TOKEN in env; live ruleset check skipped")
