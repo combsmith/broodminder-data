@@ -47,36 +47,52 @@ def hive_meta(manifest: dict) -> dict:
     return meta
 
 
-def iter_reading_files(hdir: Path):
-    """All readings windows for a hive, gz or plain."""
-    yield from sorted(list(hdir.glob("*.readings.json")) + list(hdir.glob("*.readings.json.gz")))
+def hive_windows(manifest: dict) -> dict:
+    """Map hive ID -> set of completed "<start>-<end>" window stems."""
+    wins: dict[str, set[str]] = {}
+    for key in manifest.get("completed", {}):
+        hid, s, e = key.rsplit("|", 2)
+        wins.setdefault(hid, set()).add(f"{s}-{e}")
+    return wins
 
 
-def iter_note_files(hdir: Path):
-    yield from sorted(list(hdir.glob("*.notes.json")) + list(hdir.glob("*.notes.json.gz")))
+def _window_ok(f: Path, allowed: set | None) -> bool:
+    return allowed is None or f.name.split(".", 1)[0] in allowed
+
+
+def iter_reading_files(hdir: Path, allowed: set | None = None):
+    """Readings windows for a hive, gz or plain; optionally only the completed windows."""
+    files = sorted(list(hdir.glob("*.readings.json")) + list(hdir.glob("*.readings.json.gz")))
+    yield from (f for f in files if _window_ok(f, allowed))
+
+
+def iter_note_files(hdir: Path, allowed: set | None = None):
+    files = sorted(list(hdir.glob("*.notes.json")) + list(hdir.glob("*.notes.json.gz")))
+    yield from (f for f in files if _window_ok(f, allowed))
 
 
 # Baseline of known metrics observed in production to guarantee a fixed CSV header.
 KNOWN_METRIC_KEYS = {"audio", "humidity", "radar", "swarmState", "temperature", "weight"}
 
 
-def iter_readings(hdir: Path):
+def iter_readings(hdir: Path, allowed: set | None = None):
     """Yield (positionID, reading) for every reading row in a hive dir."""
-    for f in iter_reading_files(hdir):
+    for f in iter_reading_files(hdir, allowed):
         for pos in load_json(f) or []:
             pid = pos.get("positionID")
             for r in pos.get("readings", []) or []:
                 yield pid, r
 
 
-def discover_metric_keys(raw: Path, only_hives: set | None = None) -> set[str]:
+def discover_metric_keys(raw: Path, only_hives: set | None = None, windows: dict | None = None) -> set[str]:
     """Pass 1: scan every reading for its metric names so the CSV header is
     stable and fixed before any rows are streamed."""
     metric_keys: set[str] = set()
     for hdir in sorted(raw.iterdir()):
         if not hdir.is_dir() or (only_hives is not None and hdir.name not in only_hives):
             continue
-        for _pid, r in iter_readings(hdir):
+        allowed = windows.get(hdir.name, set()) if windows is not None else None
+        for _pid, r in iter_readings(hdir, allowed):
             metric_keys.update((r.get("readings") or {}).keys())
     return metric_keys
 
@@ -97,13 +113,13 @@ def build_row(hid: str, m: dict, pid, r: dict) -> dict:
     }
 
 
-def iter_hive_rows(hdir: Path, m: dict, seen: set | None = None):
+def iter_hive_rows(hdir: Path, m: dict, seen: set | None = None, allowed: set | None = None):
     """Yield deduped rows for one hive dir. Overlapping/re-fetched windows can
     repeat the same (position, device, timestamp); dedupe within the hive
     (reset per hive to bound memory)."""
     hid = hdir.name
     hive_seen = seen if seen is not None else set()
-    for pid, r in iter_readings(hdir):
+    for pid, r in iter_readings(hdir, allowed):
         dk = (pid, r.get("deviceId"), r.get("timestamp"))
         if dk in hive_seen:
             continue
@@ -145,14 +161,16 @@ def _note_items(payload: Any) -> list:
     return items or []
 
 
-def _write_raw_notes(raw: Path, meta: dict, completed_only: bool, fh: TextIO, seen_notes: set) -> int:
+def _write_raw_notes(raw: Path, meta: dict, completed_only: bool, fh: TextIO, seen_notes: set,
+                     windows: dict | None = None) -> int:
     n = 0
     for hdir in sorted(raw.iterdir()):
         hid = hdir.name
         if not hdir.is_dir() or (completed_only and hid not in meta):
             continue
         m = meta.get(hid, {})
-        for f in iter_note_files(hdir):
+        allowed = windows.get(hid, set()) if completed_only and windows is not None else None
+        for f in iter_note_files(hdir, allowed):
             for note in _note_items(load_json(f)):
                 nk = (hid, note.get("id") or (note.get("created"), note.get("description")))
                 if nk in seen_notes:
@@ -164,7 +182,7 @@ def _write_raw_notes(raw: Path, meta: dict, completed_only: bool, fh: TextIO, se
 
 
 def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, existing_target: Path | None = None,
-                completed_only: bool = False) -> int:
+                completed_only: bool = False, windows: dict | None = None) -> int:
     """Notes are small — flatten them to plain ndjson. Returns the row count."""
     n_notes = 0
     seen_notes: set = set()
@@ -172,7 +190,7 @@ def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, ex
         if merge and _nonempty(existing_target):
             n_notes += _copy_existing_notes(existing_target, fh, seen_notes)
         if raw.exists():
-            n_notes += _write_raw_notes(raw, meta, completed_only, fh, seen_notes)
+            n_notes += _write_raw_notes(raw, meta, completed_only, fh, seen_notes, windows)
     return n_notes
 
 
@@ -192,11 +210,12 @@ def build_coverage(coverage: dict, meta: dict) -> dict:
     return cov_out
 
 
-def collect_metric_keys(args, target_ndjson: Path, meta: dict) -> set:
+def collect_metric_keys(args, target_ndjson: Path, meta: dict, windows: dict | None = None) -> set:
     """Known metrics, unioned with raw discoveries and (in merge mode) m_* keys already archived."""
     metric_keys: set[str] = set(KNOWN_METRIC_KEYS)
     if RAW.exists() and not args.no_csv:
-        metric_keys.update(discover_metric_keys(RAW, set(meta) if args.completed_only else None))
+        metric_keys.update(discover_metric_keys(RAW, set(meta) if args.completed_only else None,
+                                              windows if args.completed_only else None))
     if args.merge and _nonempty(target_ndjson):
         with gzip.open(target_ndjson, "rt", encoding="utf-8") as in_fh:
             for line in in_fh:
@@ -229,13 +248,15 @@ def replay_existing_readings(target_ndjson: Path, ndjson_fh: TextIO, csv_writer:
     return n
 
 
-def write_raw_readings(args: argparse.Namespace, meta: dict, seen: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: dict) -> int:
+def write_raw_readings(args: argparse.Namespace, meta: dict, seen: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: dict,
+                       windows: dict | None = None) -> int:
     n = 0
     for hdir in sorted(RAW.iterdir()):
         if not hdir.is_dir() or (args.completed_only and hdir.name not in meta):
             continue
         hive_seen = seen[hdir.name] if args.merge else None
-        for row in iter_hive_rows(hdir, meta.get(hdir.name, {}), hive_seen):
+        allowed = windows.get(hdir.name, set()) if args.completed_only and windows is not None else None
+        for row in iter_hive_rows(hdir, meta.get(hdir.name, {}), hive_seen, allowed):
             emit_row(row, ndjson_fh, csv_writer, cols, coverage)
             n += 1
     return n
@@ -256,6 +277,7 @@ def main() -> int:
 
     manifest = load_json(OUT / "manifest.json") if (OUT / "manifest.json").exists() else {}
     meta = hive_meta(manifest)
+    windows = hive_windows(manifest)
 
     base_cols = ["apiaryId", "apiaryName", "hiveId", "hiveName", "positionID",
                  "deviceId", "timestamp", "datetime", "batteryLevel", "chargeRemaining"]
@@ -264,7 +286,7 @@ def main() -> int:
     target_csv = OUT / "readings.csv.gz"
     target_notes = OUT / "notes.ndjson"
 
-    metric_keys = collect_metric_keys(args, target_ndjson, meta)
+    metric_keys = collect_metric_keys(args, target_ndjson, meta, windows)
 
     metric_cols = [f"m_{k}" for k in sorted(metric_keys)]
 
@@ -291,7 +313,7 @@ def main() -> int:
         if args.merge and _nonempty(target_ndjson):
             n_rows += replay_existing_readings(target_ndjson, ndjson_fh, csv_writer, cols, coverage, seen)
         if RAW.exists():
-            n_rows += write_raw_readings(args, meta, seen, ndjson_fh, csv_writer, cols, coverage)
+            n_rows += write_raw_readings(args, meta, seen, ndjson_fh, csv_writer, cols, coverage, windows)
         readings_success = True
     finally:
         ndjson_fh.close()
@@ -309,7 +331,7 @@ def main() -> int:
     notes_success = False
     try:
         n_notes = write_notes(tmp_notes, meta, raw=RAW, merge=args.merge, existing_target=target_notes,
-                             completed_only=args.completed_only)
+                             completed_only=args.completed_only, windows=windows)
         notes_success = True
     finally:
         if not notes_success and tmp_notes.exists():
