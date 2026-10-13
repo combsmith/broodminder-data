@@ -45,11 +45,11 @@ extract_rc=0
 echo "--- extract exit $extract_rc ---" >> "$LOG"
 
 if [[ "$extract_rc" -ne 0 ]]; then
-    echo "=== $(ts) sync run failed during extract (exit $extract_rc) ===" >> "$LOG"
-    exit "$extract_rc"
+    echo "=== $(ts) extract failed (exit $extract_rc); merging any saved windows anyway ===" >> "$LOG"
 fi
 
 # Merge new raw windows with existing analysis outputs (no API calls).
+# Runs even after a partial extract failure so durable windows get published.
 flatten_rc=0
 "$PY" scripts/flatten.py --merge >> "$LOG" 2>&1 || flatten_rc=$?
 echo "--- flatten exit $flatten_rc ---" >> "$LOG"
@@ -57,6 +57,11 @@ echo "--- flatten exit $flatten_rc ---" >> "$LOG"
 if [[ "$flatten_rc" -ne 0 ]]; then
     echo "=== $(ts) sync run failed during flatten (exit $flatten_rc) ===" >> "$LOG"
     exit "$flatten_rc"
+fi
+
+if [[ "$extract_rc" -ne 0 ]]; then
+    echo "=== $(ts) sync run failed during extract (exit $extract_rc) ===" >> "$LOG"
+    exit "$extract_rc"
 fi
 
 echo "=== $(ts) run done ===" >> "$LOG"
