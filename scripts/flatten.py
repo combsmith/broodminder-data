@@ -23,6 +23,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, TextIO
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "extract"
@@ -126,7 +127,7 @@ def _nonempty(path: Path | None) -> bool:
     return path is not None and path.exists() and path.stat().st_size > 0
 
 
-def _copy_existing_notes(existing_target: Path, fh, seen_notes: set) -> int:
+def _copy_existing_notes(existing_target: Path, fh: TextIO, seen_notes: set) -> int:
     n = 0
     with existing_target.open("r", encoding="utf-8") as in_notes:
         for line in in_notes:
@@ -139,12 +140,12 @@ def _copy_existing_notes(existing_target: Path, fh, seen_notes: set) -> int:
     return n
 
 
-def _note_items(payload) -> list:
+def _note_items(payload: Any) -> list:
     items = payload if isinstance(payload, list) else (payload or {}).get("notes", [])
     return items or []
 
 
-def _write_raw_notes(raw: Path, meta: dict, completed_only: bool, fh, seen_notes: set) -> int:
+def _write_raw_notes(raw: Path, meta: dict, completed_only: bool, fh: TextIO, seen_notes: set) -> int:
     n = 0
     for hdir in sorted(raw.iterdir()):
         hid = hdir.name
@@ -207,14 +208,14 @@ def collect_metric_keys(args, target_ndjson: Path, meta: dict) -> set:
     return metric_keys
 
 
-def emit_row(row: dict, ndjson_fh, csv_writer, cols: list, coverage: dict) -> None:
+def emit_row(row: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: dict) -> None:
     ndjson_fh.write(json.dumps(row) + "\n")
     if csv_writer:
         csv_writer.writerow({k: row.get(k) for k in cols})
     accumulate_coverage(coverage, row)
 
 
-def replay_existing_readings(target_ndjson: Path, ndjson_fh, csv_writer, cols: list, coverage: dict, seen: dict) -> int:
+def replay_existing_readings(target_ndjson: Path, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: dict, seen: dict) -> int:
     n = 0
     with gzip.open(target_ndjson, "rt", encoding="utf-8") as in_fh:
         for line in in_fh:
@@ -228,7 +229,7 @@ def replay_existing_readings(target_ndjson: Path, ndjson_fh, csv_writer, cols: l
     return n
 
 
-def write_raw_readings(args, meta: dict, seen: dict, ndjson_fh, csv_writer, cols: list, coverage: dict) -> int:
+def write_raw_readings(args: argparse.Namespace, meta: dict, seen: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: dict) -> int:
     n = 0
     for hdir in sorted(RAW.iterdir()):
         if not hdir.is_dir() or (args.completed_only and hdir.name not in meta):
