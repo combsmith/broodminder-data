@@ -122,7 +122,8 @@ def accumulate_coverage(coverage: defaultdict, row: dict) -> None:
         c["max_ts"] = ts if c["max_ts"] is None else max(c["max_ts"], ts)
 
 
-def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, existing_target: Path | None = None) -> int:
+def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, existing_target: Path | None = None,
+                completed_only: bool = False) -> int:
     """Notes are small — flatten them to plain ndjson. Returns the row count."""
     n_notes = 0
     seen_notes: set = set()
@@ -143,6 +144,8 @@ def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, ex
                 if not hdir.is_dir():
                     continue
                 hid = hdir.name
+                if completed_only and hid not in meta:
+                    continue
                 m = meta.get(hid, {})
                 for f in iter_note_files(hdir):
                     payload = load_json(f)
@@ -178,6 +181,8 @@ def main() -> int:
     ap.add_argument("--no-csv", action="store_true", help="skip the (large) CSV output")
     ap.add_argument("--merge", action="store_true",
                     help="merge incremental raw windows into existing readings and notes outputs")
+    ap.add_argument("--completed-only", action="store_true",
+                    help="skip raw hive dirs with no completed manifest entry (their metadata is unknown)")
     args = ap.parse_args()
 
     if not RAW.exists() and not args.merge:
@@ -250,6 +255,8 @@ def main() -> int:
             for hdir in sorted(RAW.iterdir()):
                 if not hdir.is_dir():
                     continue
+                if args.completed_only and hdir.name not in meta:
+                    continue
                 m = meta.get(hdir.name, {})
                 hive_seen = seen[hdir.name] if args.merge else None
                 for row in iter_hive_rows(hdir, m, hive_seen):
@@ -274,7 +281,8 @@ def main() -> int:
 
     notes_success = False
     try:
-        n_notes = write_notes(tmp_notes, meta, raw=RAW, merge=args.merge, existing_target=target_notes)
+        n_notes = write_notes(tmp_notes, meta, raw=RAW, merge=args.merge, existing_target=target_notes,
+                             completed_only=args.completed_only)
         notes_success = True
     finally:
         if not notes_success and tmp_notes.exists():

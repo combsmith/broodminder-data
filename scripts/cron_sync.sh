@@ -49,9 +49,12 @@ if [[ "$extract_rc" -ne 0 ]]; then
 fi
 
 # Merge new raw windows with existing analysis outputs (no API calls).
-# Runs even after a partial extract failure so durable windows get published.
+# Runs even after a partial extract failure so durable windows get published;
+# then --completed-only skips hives with no manifest entry (unknown metadata).
 flatten_rc=0
-"$PY" scripts/flatten.py --merge >> "$LOG" 2>&1 || flatten_rc=$?
+flatten_args=(--merge)
+[[ "$extract_rc" -ne 0 ]] && flatten_args+=(--completed-only)
+"$PY" scripts/flatten.py "${flatten_args[@]}" >> "$LOG" 2>&1 || flatten_rc=$?
 echo "--- flatten exit $flatten_rc ---" >> "$LOG"
 
 if [[ "$flatten_rc" -ne 0 ]]; then
