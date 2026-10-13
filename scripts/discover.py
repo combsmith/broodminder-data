@@ -32,6 +32,22 @@ def first(obj, *keys):
     return None
 
 
+def _iter_hives(apiaries):
+    """Yield every hive in the tree, accepting a bare list or {"apiaries": [...]}."""
+    containers = apiaries if isinstance(apiaries, list) else (apiaries or {}).get("apiaries", [])
+    for ap in containers or []:
+        yield from first(ap, "hives") or []
+
+
+def _first_device_id(hv):
+    """Return the first non-empty device id on a hive, or None."""
+    for dv in first(hv, "devices", "positions") or []:
+        device_id = first(dv, "deviceId", "id", "deviceID")
+        if device_id:
+            return device_id
+    return None
+
+
 def find_sample_ids(apiaries):
     """Walk the apiary tree and return the first hive_id and first device_id found.
 
@@ -42,17 +58,10 @@ def find_sample_ids(apiaries):
     Tolerates the two payload shapes (a bare list or a {"apiaries": [...]}
     wrapper) and the schema's key aliases (hiveId/id, deviceId/id, etc.).
     """
-    containers = apiaries if isinstance(apiaries, list) else (apiaries or {}).get("apiaries", [])
     hive_id = device_id = None
-    for ap in containers or []:
-        for hv in first(ap, "hives") or []:
-            hive_id = hive_id or first(hv, "hiveId", "id", "hiveID")
-            for dv in first(hv, "devices", "positions") or []:
-                device_id = device_id or first(dv, "deviceId", "id", "deviceID")
-                if device_id:
-                    break
-            if hive_id and device_id:
-                break
+    for hv in _iter_hives(apiaries):
+        hive_id = hive_id or first(hv, "hiveId", "id", "hiveID")
+        device_id = device_id or _first_device_id(hv)
         if hive_id and device_id:
             break
     return hive_id, device_id
