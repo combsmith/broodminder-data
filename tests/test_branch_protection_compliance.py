@@ -70,11 +70,13 @@ def extract_rule_types(ruleset_json: dict) -> set[str]:
 def _fnmatch_github_path(ref: str, pattern: str) -> bool:
     """Match a ref against a GitHub ruleset fnmatch pattern with path-aware semantics.
 
-    In GitHub ruleset fnmatch syntax:
+    In GitHub ruleset fnmatch syntax (Ruby File.fnmatch with File::FNM_PATHNAME):
     - '*' matches any character except '/'
-    - '**' matches across path segments, including zero directories (e.g. '/**/' matches '/' or '/.+/')
+    - '/**/' matches across path segments, including zero directories (e.g. '/**/' matches '/' or '/.+/')
+    - '/**/*' matches recursively across nested path segments
+    - bare '**' matches within a single path segment ('[^/]*') and cannot cross multiple '/' separators
     - '?' matches any single character except '/'
-    - character classes '[...]' match specified characters
+    - character classes '[...]' match specified characters excluding '/' (FNM_PATHNAME restriction)
     """
     i = 0
     n = len(pattern)
@@ -88,12 +90,8 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
             res.append("(?:.+/)?")
             i += 3
             continue
-        if i + 3 == n and pattern[i:i + 3] == "/**":
-            res.append("(?:/.*)?")
-            i += 3
-            continue
         if pattern[i:i + 2] == "**":
-            res.append(".*")
+            res.append("[^/]*")
             i += 2
             continue
         c = pattern[i]
@@ -121,7 +119,7 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
                     stuff = "^" + stuff[1:]
                 elif stuff.startswith("^"):
                     stuff = "\\" + stuff
-                res.append(f"[{stuff}]")
+                res.append(f"(?![/])[{stuff}]")
         else:
             res.append(re.escape(c))
             i += 1
@@ -317,7 +315,7 @@ def test_ruleset_targets_default_branch_custom_default_branch():
 
 
 def test_ruleset_targets_default_branch_path_aware_fnmatch():
-    """Verify single asterisk does not cross slashes whereas double asterisk does."""
+    """Verify single asterisk and bare trailing /** do not cross multiple path separators."""
     rs_single_star_cross_dir = {
         "target": "branch",
         "conditions": {"ref_name": {"include": ["refs/*"], "exclude": []}},
@@ -326,8 +324,27 @@ def test_ruleset_targets_default_branch_path_aware_fnmatch():
         "target": "branch",
         "conditions": {"ref_name": {"include": ["refs/**"], "exclude": []}},
     }
+    rs_recursive_wildcard = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs/**/*"], "exclude": []}},
+    }
     assert ruleset_targets_default_branch(rs_single_star_cross_dir) is False
-    assert ruleset_targets_default_branch(rs_double_star_cross_dir) is True
+    assert ruleset_targets_default_branch(rs_double_star_cross_dir) is False
+    assert ruleset_targets_default_branch(rs_recursive_wildcard) is True
+
+
+def test_ruleset_targets_default_branch_rejects_bracket_expression_matching_separator():
+    """Verify character classes cannot match path separator / under FNM_PATHNAME."""
+    rs_bracket_slash = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs[/]heads/main"], "exclude": []}},
+    }
+    rs_bracket_multi = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs[a-z/]heads/main"], "exclude": []}},
+    }
+    assert ruleset_targets_default_branch(rs_bracket_slash) is False
+    assert ruleset_targets_default_branch(rs_bracket_multi) is False
 
 
 def test_ruleset_targets_default_branch_rejects_excluded_main():
