@@ -22,6 +22,7 @@ Ref: issue #29 (Scorecard: Branch-Protection 0/10 -> 8/10)
 
 from __future__ import annotations
 
+import fnmatch
 import os
 
 import pytest
@@ -66,6 +67,21 @@ def extract_rule_types(ruleset_json: dict) -> set[str]:
     }
 
 
+def _ref_matches_pattern(ref: str, pattern: str) -> bool:
+    """Return whether ref matches GitHub ruleset ref pattern using fnmatch or keywords."""
+    if pattern == "~ALL":
+        return True
+    if pattern == "~DEFAULT_BRANCH":
+        return ref in ("main", "refs/heads/main", "~DEFAULT_BRANCH")
+    if fnmatch.fnmatch(ref, pattern):
+        return True
+    if not pattern.startswith("refs/") and fnmatch.fnmatch(ref, f"refs/heads/{pattern}"):
+        return True
+    if ref.startswith("refs/heads/") and fnmatch.fnmatch(ref[len("refs/heads/"):], pattern):
+        return True
+    return False
+
+
 def ruleset_targets_default_branch(ruleset_json: dict) -> bool:
     """Check whether a ruleset targets the default branch and does not exclude it."""
     if not isinstance(ruleset_json, dict):
@@ -81,12 +97,19 @@ def ruleset_targets_default_branch(ruleset_json: dict) -> bool:
         return False
     exclude = ref_name.get("exclude")
     if isinstance(exclude, list):
-        if any(target in DEFAULT_BRANCH_TARGETS for target in exclude):
-            return False
-    return any(
-        target in DEFAULT_BRANCH_TARGETS or target == "~ALL"
-        for target in include
-    )
+        for pattern in exclude:
+            if isinstance(pattern, str) and (
+                _ref_matches_pattern("refs/heads/main", pattern)
+                or _ref_matches_pattern("main", pattern)
+            ):
+                return False
+    for pattern in include:
+        if isinstance(pattern, str) and (
+            _ref_matches_pattern("refs/heads/main", pattern)
+            or _ref_matches_pattern("main", pattern)
+        ):
+            return True
+    return False
 
 
 def evaluate_scorecard_tier1_compliance(rulesets_json: list[dict]) -> tuple[bool, list[str]]:
@@ -189,6 +212,42 @@ def test_ruleset_targets_default_branch_rejects_excluded_main():
     }
     assert ruleset_targets_default_branch(rs_excluded_main) is False
     assert ruleset_targets_default_branch(rs_excluded_default) is False
+
+
+def test_ruleset_targets_default_branch_rejects_fnmatch_pattern_exclusions():
+    rs_prefix_wildcard = {
+        "conditions": {
+            "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/ma*"]}
+        }
+    }
+    rs_short_wildcard = {
+        "conditions": {
+            "ref_name": {"include": ["~ALL"], "exclude": ["ma*"]}
+        }
+    }
+    rs_all_branches_wildcard = {
+        "conditions": {
+            "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/*"]}
+        }
+    }
+    assert ruleset_targets_default_branch(rs_prefix_wildcard) is False
+    assert ruleset_targets_default_branch(rs_short_wildcard) is False
+    assert ruleset_targets_default_branch(rs_all_branches_wildcard) is False
+
+
+def test_ruleset_targets_default_branch_accepts_fnmatch_pattern_inclusions():
+    rs_prefix_wildcard = {
+        "conditions": {
+            "ref_name": {"include": ["refs/heads/ma*"], "exclude": []}
+        }
+    }
+    rs_all_branches_wildcard = {
+        "conditions": {
+            "ref_name": {"include": ["refs/heads/*"], "exclude": []}
+        }
+    }
+    assert ruleset_targets_default_branch(rs_prefix_wildcard) is True
+    assert ruleset_targets_default_branch(rs_all_branches_wildcard) is True
 
 
 def test_evaluate_scorecard_tier1_compliance_success():
