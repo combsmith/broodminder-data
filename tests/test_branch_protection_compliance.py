@@ -107,7 +107,7 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
             i += 1
         elif c == "[":
             j = i + 1
-            if j < n and pattern[j] == "!":
+            if j < n and pattern[j] in ("!", "^"):
                 j += 1
             if j < n and pattern[j] == "]":
                 j += 1
@@ -119,10 +119,8 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
             else:
                 stuff = pattern[i + 1:j]
                 i = j + 1
-                if stuff.startswith("!"):
+                if stuff.startswith("!") or stuff.startswith("^"):
                     stuff = "^" + stuff[1:]
-                elif stuff.startswith("^"):
-                    stuff = "\\" + stuff
                 res.append(f"(?![/])[{stuff}]")
         else:
             res.append(re.escape(c))
@@ -452,6 +450,28 @@ def test_ruleset_targets_default_branch_consecutive_recursive_wildcards():
     assert ruleset_targets_default_branch(rs_consecutive_leading) is True
 
 
+def test_ruleset_targets_default_branch_rejects_caret_negation_exclusion():
+    """Verify caret negation [^...] in exclusion properly matches and excludes default branch."""
+    rs_caret_exclude = {
+        "target": "branch",
+        "conditions": {
+            "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/m[^x]in"]}
+        },
+    }
+    assert ruleset_targets_default_branch(rs_caret_exclude) is False
+
+
+def test_ruleset_targets_default_branch_accepts_caret_negation_inclusion():
+    """Verify caret negation [^...] in inclusion properly matches and includes default branch."""
+    rs_caret_include = {
+        "target": "branch",
+        "conditions": {
+            "ref_name": {"include": ["refs/heads/m[^x]in"], "exclude": []}
+        },
+    }
+    assert ruleset_targets_default_branch(rs_caret_include) is True
+
+
 def test_evaluate_scorecard_tier1_compliance_multiple_same_named_rulesets():
     """Verify evaluation succeeds when an active ruleset satisfies protection despite an inactive duplicate."""
     rulesets = [
@@ -472,6 +492,33 @@ def test_evaluate_scorecard_tier1_compliance_multiple_same_named_rulesets():
             "rules": [
                 {"type": "pull_request"},
                 {"type": "deletion"},
+                {"type": "non_fast_forward"},
+            ],
+        },
+    ]
+    compliant, missing = evaluate_scorecard_tier1_compliance(rulesets)
+    assert compliant is True
+    assert missing == []
+
+
+def test_evaluate_scorecard_tier1_compliance_layered_rulesets():
+    """Verify evaluation succeeds when deletion and non_fast_forward are layered across multiple active rulesets."""
+    rulesets = [
+        {
+            "name": RULESET_NAME,
+            "target": "branch",
+            "enforcement": "active",
+            "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+            "rules": [
+                {"type": "deletion"},
+            ],
+        },
+        {
+            "name": RULESET_NAME,
+            "target": "branch",
+            "enforcement": "active",
+            "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+            "rules": [
                 {"type": "non_fast_forward"},
             ],
         },
@@ -661,40 +708,12 @@ def test_branch_protection_tier1_rules_live():
         )
         candidate_details.append(detail_json)
 
-    # Evaluate all candidates to verify at least one candidate actively protects the default branch with Tier 1 rules
-    compliant_candidate = None
-    candidate_reasons = []
-
-    for detail_json in candidate_details:
-        rs_id = detail_json.get("id")
-        if detail_json.get("enforcement", "").lower() != "active":
-            candidate_reasons.append(
-                f"ID {rs_id}: enforcement is {detail_json.get('enforcement')!r} (expected 'active')"
-            )
-            continue
-        if detail_json.get("target", "").lower() != "branch":
-            candidate_reasons.append(
-                f"ID {rs_id}: target is {detail_json.get('target')!r} (expected 'branch')"
-            )
-            continue
-        if not ruleset_targets_default_branch(detail_json, default_branch=default_branch):
-            candidate_reasons.append(
-                f"ID {rs_id}: does not effectively target default branch '{default_branch}'"
-            )
-            continue
-        missing_rules = [
-            rule_type for rule_type in REQUIRED_RULE_TYPES
-            if not ruleset_has_rule_type(detail_json, rule_type)
-        ]
-        if missing_rules:
-            candidate_reasons.append(
-                f"ID {rs_id}: missing required Tier 1 rule types {missing_rules}"
-            )
-            continue
-        compliant_candidate = detail_json
-        break
-
-    assert compliant_candidate is not None, (
-        f"No active, compliant `{RULESET_NAME}` ruleset found protecting '{default_branch}'. "
-        f"Evaluated candidates: {candidate_reasons}"
+    # Evaluate all candidates to verify that active ruleset(s) protecting the default branch satisfy Tier 1 rules
+    is_compliant, missing_rules = evaluate_scorecard_tier1_compliance(
+        candidate_details, default_branch=default_branch
+    )
+    assert is_compliant, (
+        f"Active `{RULESET_NAME}` ruleset(s) protecting '{default_branch}' must satisfy "
+        f"OpenSSF Scorecard Branch-Protection Tier 1 requirements (#29). "
+        f"Missing required rules: {missing_rules}. Evaluated {len(candidate_details)} candidate(s)."
     )
