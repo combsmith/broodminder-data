@@ -17,9 +17,12 @@ LOG="$DIR/data/cron_sync.log"
 LOCKFILE="$DIR/data/.sync.lock"
 
 cd "$DIR" || exit 1
-[ -x "$PY" ] || PY="python3"
+[[ -x "$PY" ]] || PY="python3"
 
-ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+ts() {
+    date -u +%Y-%m-%dT%H:%M:%SZ
+    return
+}
 
 mkdir -p "$DIR/data"
 
@@ -41,7 +44,7 @@ extract_rc=0
 "$PY" scripts/extract_all.py --catchup >> "$LOG" 2>&1 || extract_rc=$?
 echo "--- extract exit $extract_rc ---" >> "$LOG"
 
-if [ "$extract_rc" -ne 0 ]; then
+if [[ "$extract_rc" -ne 0 ]]; then
     echo "=== $(ts) sync run failed during extract (exit $extract_rc) ===" >> "$LOG"
     exit "$extract_rc"
 fi
@@ -51,7 +54,7 @@ flatten_rc=0
 "$PY" scripts/flatten.py --merge >> "$LOG" 2>&1 || flatten_rc=$?
 echo "--- flatten exit $flatten_rc ---" >> "$LOG"
 
-if [ "$flatten_rc" -ne 0 ]; then
+if [[ "$flatten_rc" -ne 0 ]]; then
     echo "=== $(ts) sync run failed during flatten (exit $flatten_rc) ===" >> "$LOG"
     exit "$flatten_rc"
 fi
