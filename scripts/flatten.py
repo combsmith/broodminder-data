@@ -38,7 +38,7 @@ def load_json(path: Path) -> Any:
 
 
 def hive_meta(manifest: dict) -> dict:
-    meta = {}
+    meta: dict[str, dict[str, Any]] = {}
     for key, rec in manifest.get("completed", {}).items():
         hid = key.rsplit("|", 2)[0]  # hive IDs may themselves contain "|"
         meta.setdefault(hid, {"apiaryName": rec.get("apiaryName"),
