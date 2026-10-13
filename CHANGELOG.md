@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-10-12
+
 ### Security
 - Hash-pinned Python dependencies in `requirements.txt` and `scripts/build-requirements.txt`, and hardened workflow pip installations with `--require-hashes --only-binary :all:` to satisfy OpenSSF Scorecard Pinned-Dependencies check and achieve accepted exception auto-closure (#44).
 - Expanded `SECURITY.md` with explicit vulnerability disclosure guidelines, GitHub Private Vulnerability Reporting instructions, email fallback, response timelines, and scope to satisfy OpenSSF Scorecard `securityPolicyContainsVulnerabilityDisclosure` probe and achieve a 10/10 security-policy score (#33).
@@ -69,7 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Authoritative OpenAPI 3.1 specification for the External User API (`openapi/broodminder-openapi.yaml`) with Redocly linting and interactive docs preview.
 - PyPI onboarding probe, build verification, and Trusted Publishing OIDC workflow.
 
-[Unreleased]: https://github.com/petry-projects/broodminder-data/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/petry-projects/broodminder-data/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/petry-projects/broodminder-data/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/petry-projects/broodminder-data/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/petry-projects/broodminder-data/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/petry-projects/broodminder-data/compare/v0.1.3...v0.1.4
