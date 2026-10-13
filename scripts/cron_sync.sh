@@ -21,7 +21,6 @@ cd "$DIR" || exit 1
 
 ts() {
     date -u +%Y-%m-%dT%H:%M:%SZ
-    return
 }
 
 mkdir -p "$DIR/data"

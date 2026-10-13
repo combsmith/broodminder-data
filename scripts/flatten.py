@@ -23,6 +23,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, TextIO
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "extract"
@@ -138,7 +139,7 @@ def _note_key(hid, note: dict) -> tuple:
     return (hid, (note.get("created"), note.get("description"), note_text))
 
 
-def _copy_existing_notes(fh, existing_target: Path, seen_notes: set) -> int:
+def _copy_existing_notes(fh: TextIO, existing_target: Path, seen_notes: set) -> int:
     """Copy the prior notes archive into fh, recording each key. Returns the count."""
     n_notes = 0
     with existing_target.open("r", encoding="utf-8") as in_notes:
@@ -218,7 +219,7 @@ def _existing_metric_keys(target_ndjson: Path) -> set[str]:
     return keys
 
 
-def _collect_metric_keys(args, target_ndjson: Path, meta: dict) -> set[str]:
+def _collect_metric_keys(args: argparse.Namespace, target_ndjson: Path, meta: dict) -> set[str]:
     """Pass 1: discover metric keys, unioned with KNOWN_METRIC_KEYS for fixed header stability."""
     metric_keys: set[str] = set(KNOWN_METRIC_KEYS)
     if RAW.exists() and not args.no_csv:
@@ -233,7 +234,7 @@ def _collect_metric_keys(args, target_ndjson: Path, meta: dict) -> set[str]:
 class _ReadingsSink:
     """Fans each output row out to the NDJSON stream, optional CSV, and coverage."""
 
-    def __init__(self, ndjson_fh, csv_writer, cols: list[str]):
+    def __init__(self, ndjson_fh: TextIO, csv_writer: Any, cols: list[str]):
         self.ndjson_fh = ndjson_fh
         self.csv_writer = csv_writer
         self.cols = cols
@@ -272,7 +273,7 @@ def _stream_raw_readings(sink: _ReadingsSink, meta: dict, seen: dict, merge: boo
             sink.emit(json.dumps(row) + "\n", row)
 
 
-def _write_readings(args, meta: dict, metric_cols: list[str],
+def _write_readings(args: argparse.Namespace, meta: dict, metric_cols: list[str],
                     target_ndjson: Path, target_csv: Path) -> _ReadingsSink:
     """Stream readings to tmp files, then atomically replace the targets."""
     proc_id = os.getpid()
