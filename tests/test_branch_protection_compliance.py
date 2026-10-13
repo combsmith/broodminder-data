@@ -13,7 +13,7 @@ Rulesets live in the GitHub control plane, not in a file inside this repo, so mi
 ``test_ruleset_compliance.py`` and ``test_pr_quality_ruleset_compliance.py``, this guard:
   * unit-tests the compliance predicates offline (always runs, fast, deterministic), and
   * verifies the *live* ruleset via the GitHub REST API when a token is present,
-    skipping gracefully otherwise (green out of the box, real check when credentialed).
+    skipping gracefully when uncredentialed, and strictly failing on error when credentialed.
 
 Ref: https://github.com/ossf/scorecard/blob/main/docs/checks.md#branch-protection
 Ref: petry-projects/.github standards/github-settings.md#pr-quality--standard-ruleset-all-repositories
@@ -33,6 +33,7 @@ pytestmark = pytest.mark.compliance
 REPO_SLUG = os.environ.get("GITHUB_REPOSITORY", "petry-projects/broodminder-data")
 RULESET_NAME = "pr-quality"
 REQUIRED_RULE_TYPES = ("deletion", "non_fast_forward")
+DEFAULT_BRANCH_TARGETS = ("~DEFAULT_BRANCH", "refs/heads/main", "main")
 
 
 def ruleset_has_rule_type(ruleset_json: dict, rule_type: str) -> bool:
@@ -66,7 +67,7 @@ def extract_rule_types(ruleset_json: dict) -> set[str]:
 
 
 def ruleset_targets_default_branch(ruleset_json: dict) -> bool:
-    """Check whether a ruleset targets the default branch or all branches."""
+    """Check whether a ruleset targets the default branch and does not exclude it."""
     if not isinstance(ruleset_json, dict):
         return False
     conditions = ruleset_json.get("conditions")
@@ -78,8 +79,12 @@ def ruleset_targets_default_branch(ruleset_json: dict) -> bool:
     include = ref_name.get("include")
     if not isinstance(include, list):
         return False
+    exclude = ref_name.get("exclude")
+    if isinstance(exclude, list):
+        if any(target in DEFAULT_BRANCH_TARGETS for target in exclude):
+            return False
     return any(
-        target in ("~DEFAULT_BRANCH", "refs/heads/main", "main", "~ALL")
+        target in DEFAULT_BRANCH_TARGETS or target == "~ALL"
         for target in include
     )
 
@@ -161,10 +166,29 @@ def test_ruleset_targets_default_branch():
     rs_other = {
         "conditions": {"ref_name": {"include": ["refs/heads/feature/*"], "exclude": []}}
     }
+    rs_all = {
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}}
+    }
     assert ruleset_targets_default_branch(rs_default) is True
     assert ruleset_targets_default_branch(rs_main) is True
+    assert ruleset_targets_default_branch(rs_all) is True
     assert ruleset_targets_default_branch(rs_other) is False
     assert ruleset_targets_default_branch({}) is False
+
+
+def test_ruleset_targets_default_branch_rejects_excluded_main():
+    rs_excluded_main = {
+        "conditions": {
+            "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/main"]}
+        }
+    }
+    rs_excluded_default = {
+        "conditions": {
+            "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": ["~DEFAULT_BRANCH"]}
+        }
+    }
+    assert ruleset_targets_default_branch(rs_excluded_main) is False
+    assert ruleset_targets_default_branch(rs_excluded_default) is False
 
 
 def test_evaluate_scorecard_tier1_compliance_success():
@@ -219,6 +243,23 @@ def test_evaluate_scorecard_tier1_compliance_missing_non_fast_forward():
     assert missing == ["non_fast_forward"]
 
 
+def test_evaluate_scorecard_tier1_compliance_inactive_ruleset():
+    rulesets = [
+        {
+            "name": RULESET_NAME,
+            "enforcement": "disabled",
+            "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+            "rules": [
+                {"type": "deletion"},
+                {"type": "non_fast_forward"},
+            ],
+        }
+    ]
+    compliant, missing = evaluate_scorecard_tier1_compliance(rulesets)
+    assert compliant is False
+    assert missing == ["deletion", "non_fast_forward"]
+
+
 def test_evaluate_scorecard_tier1_compliance_empty():
     compliant, missing = evaluate_scorecard_tier1_compliance([])
     assert compliant is False
@@ -245,43 +286,62 @@ def test_branch_protection_tier1_rules_live():
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    try:
-        listing = httpx.get(
-            f"https://api.github.com/repos/{REPO_SLUG}/rulesets",
-            headers=headers,
-            params={"per_page": 100},
-            timeout=15,
-        )
-    except httpx.HTTPError as exc:
-        pytest.skip(f"could not reach GitHub API: {exc}")
+    # Follow Link header pagination across all pages to locate RULESET_NAME
+    matching_ruleset = None
+    next_url: str | None = f"https://api.github.com/repos/{REPO_SLUG}/rulesets"
+    request_params: dict = {"per_page": 100}
 
-    if listing.status_code != 200:
-        if listing.status_code in (401, 403):
-            pytest.fail(
-                f"access denied listing {REPO_SLUG} rulesets "
-                f"(HTTP {listing.status_code}); "
-                "ensure GH_TOKEN has 'Metadata' (read) repository permission"
+    while next_url is not None and matching_ruleset is None:
+        try:
+            listing = httpx.get(
+                next_url,
+                headers=headers,
+                params=request_params,
+                timeout=15,
             )
-        pytest.skip(
-            f"could not list {REPO_SLUG} rulesets (HTTP {listing.status_code}); "
-            "live ruleset check skipped"
+        except httpx.HTTPError as exc:
+            pytest.fail(f"could not reach GitHub API listing rulesets: {exc}")
+
+        if listing.status_code != 200:
+            pytest.fail(
+                f"GitHub API returned HTTP {listing.status_code} listing {REPO_SLUG} rulesets"
+            )
+
+        try:
+            listing_data = listing.json()
+        except Exception as exc:
+            pytest.fail(f"could not parse ruleset listing JSON: {exc}")
+
+        if not isinstance(listing_data, list):
+            pytest.fail(
+                f"unexpected API response format for rulesets listing "
+                f"(expected list, got {type(listing_data).__name__})"
+            )
+
+        matching_ruleset = next(
+            (r for r in listing_data if isinstance(r, dict) and r.get("name") == RULESET_NAME),
+            None,
         )
 
-    rulesets = listing.json()
-    if not isinstance(rulesets, list):
-        pytest.skip(f"unexpected API response format: {type(rulesets).__name__}")
+        # Advance to the next page (Link header) unless the ruleset was already found.
+        link_header = listing.headers.get("Link", "")
+        next_url = None
+        request_params = {}
+        for part in link_header.split(","):
+            part = part.strip()
+            if 'rel="next"' in part:
+                url_part = part.split(";")[0].strip()
+                if url_part.startswith("<") and url_part.endswith(">"):
+                    next_url = url_part[1:-1]
+                    break
 
-    match = next(
-        (r for r in rulesets if isinstance(r, dict) and r.get("name") == RULESET_NAME),
-        None,
-    )
-    assert match is not None, (
+    assert matching_ruleset is not None, (
         f"repository must define the `{RULESET_NAME}` ruleset (org rulesets standard)"
     )
 
-    ruleset_id = match.get("id")
+    ruleset_id = matching_ruleset.get("id")
     if ruleset_id is None:
-        pytest.skip(f"ruleset '{RULESET_NAME}' found but is missing an 'id' field")
+        pytest.fail(f"ruleset '{RULESET_NAME}' found but is missing an 'id' field")
 
     try:
         detail = httpx.get(
@@ -290,18 +350,27 @@ def test_branch_protection_tier1_rules_live():
             timeout=15,
         )
     except httpx.HTTPError as exc:
-        pytest.skip(f"could not reach GitHub API: {exc}")
+        pytest.fail(f"could not reach GitHub API fetching ruleset detail: {exc}")
 
     if detail.status_code != 200:
-        if detail.status_code in (401, 403):
-            pytest.fail(
-                f"access denied reading '{RULESET_NAME}' ruleset (HTTP {detail.status_code})"
-            )
-        pytest.skip(
-            f"could not read `{RULESET_NAME}` ruleset (HTTP {detail.status_code})"
+        pytest.fail(
+            f"could not read `{RULESET_NAME}` ruleset detail (HTTP {detail.status_code})"
         )
 
-    detail_json = detail.json()
+    try:
+        detail_json = detail.json()
+    except Exception as exc:
+        pytest.fail(f"could not parse ruleset detail JSON: {exc}")
+
+    # Validate active enforcement and branch applicability
+    assert detail_json.get("enforcement", "").lower() == "active", (
+        f"`{RULESET_NAME}` ruleset enforcement must be 'active', got {detail_json.get('enforcement')!r}"
+    )
+    assert ruleset_targets_default_branch(detail_json) is True, (
+        f"`{RULESET_NAME}` ruleset must target default branch without excluding it"
+    )
+
+    # Validate required Tier 1 rules
     for rule_type in REQUIRED_RULE_TYPES:
         assert ruleset_has_rule_type(detail_json, rule_type) is True, (
             f"Rule `{rule_type}` must be enabled on the `{RULESET_NAME}` ruleset to satisfy "
