@@ -48,6 +48,7 @@ def validate_require_hashes_file(path: Path, expected_packages: list[str] | None
 
     blocks: list[tuple[str, list[str]]] = []
     violations: list[str] = []
+    requires_continuation = False
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -55,14 +56,21 @@ def validate_require_hashes_file(path: Path, expected_packages: list[str] | None
             continue
         m = _PIN_LINE.match(line)
         if m:
+            if requires_continuation:
+                violations.append(f"expected continuation after line ending in \\ before new package: {line!r}")
             blocks.append((m.group("name"), [line]))
+            requires_continuation = line.endswith("\\")
         elif _HASH_OPTION.match(line):
-            if blocks:
+            if requires_continuation and blocks:
                 blocks[-1][1].append(line)
+                requires_continuation = line.endswith("\\")
             else:
-                violations.append(f"hash line without package: {line!r}")
+                violations.append(f"hash line without preceding continuation backslash: {line!r}")
         else:
             violations.append(f"unpinned or invalid line in {path.name}: {line!r}")
+
+    if requires_continuation:
+        violations.append(f"{path.name} ends with an unfulfilled continuation backslash")
 
     if not blocks:
         violations.append(f"no pinned requirements found in {path.name}")
@@ -196,5 +204,21 @@ def test_validation_rejects_comment_only_hashes_and_invalid_lines(tmp_path: Path
     )
     violations = validate_require_hashes_file(trailing_junk_file)
     assert any("unpinned or invalid line" in v for v in violations)
+
+    missing_continuation_file = tmp_path / "missing_cont.txt"
+    missing_continuation_file.write_text(
+        "pkg==1.0\n  --hash=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+        encoding="utf-8",
+    )
+    violations = validate_require_hashes_file(missing_continuation_file)
+    assert any("hash line without preceding continuation backslash" in v for v in violations)
+
+    unfulfilled_file = tmp_path / "unfulfilled.txt"
+    unfulfilled_file.write_text(
+        "pkg==1.0 \\\n  --hash=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\\n",
+        encoding="utf-8",
+    )
+    violations = validate_require_hashes_file(unfulfilled_file)
+    assert any("unfulfilled continuation backslash" in v for v in violations)
 
 
