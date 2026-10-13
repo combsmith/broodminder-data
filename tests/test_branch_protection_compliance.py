@@ -72,7 +72,7 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
 
     In GitHub ruleset fnmatch syntax:
     - '*' matches any character except '/'
-    - '**' matches any character including '/'
+    - '**' matches across path segments, including zero directories (e.g. '/**/' matches '/' or '/.+/')
     - '?' matches any single character except '/'
     - character classes '[...]' match specified characters
     """
@@ -80,14 +80,26 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
     n = len(pattern)
     res: list[str] = []
     while i < n:
+        if pattern[i:i + 4] == "/**/":
+            res.append("/(?:.+/)?")
+            i += 4
+            continue
+        if i == 0 and pattern[i:i + 3] == "**/":
+            res.append("(?:.+/)?")
+            i += 3
+            continue
+        if i + 3 == n and pattern[i:i + 3] == "/**":
+            res.append("(?:/.*)?")
+            i += 3
+            continue
+        if pattern[i:i + 2] == "**":
+            res.append(".*")
+            i += 2
+            continue
         c = pattern[i]
         if c == "*":
-            if i + 1 < n and pattern[i + 1] == "*":
-                res.append(".*")
-                i += 2
-            else:
-                res.append("[^/]*")
-                i += 1
+            res.append("[^/]*")
+            i += 1
         elif c == "?":
             res.append("[^/]")
             i += 1
@@ -377,6 +389,28 @@ def test_ruleset_targets_default_branch_accepts_fnmatch_pattern_inclusions():
     }
     assert ruleset_targets_default_branch(rs_prefix_wildcard) is True
     assert ruleset_targets_default_branch(rs_all_branches_wildcard) is True
+
+
+def test_ruleset_targets_default_branch_zero_directory_wildcard_exclusion():
+    """Verify zero-directory matching for **/ properly excludes default branch."""
+    rs_zero_dir_exclude = {
+        "target": "branch",
+        "conditions": {
+            "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/**/main"]}
+        },
+    }
+    assert ruleset_targets_default_branch(rs_zero_dir_exclude) is False
+
+
+def test_ruleset_targets_default_branch_zero_directory_wildcard_inclusion():
+    """Verify zero-directory matching for **/ properly includes default branch."""
+    rs_zero_dir_include = {
+        "target": "branch",
+        "conditions": {
+            "ref_name": {"include": ["refs/heads/**/main"], "exclude": []}
+        },
+    }
+    assert ruleset_targets_default_branch(rs_zero_dir_include) is True
 
 
 def test_evaluate_scorecard_tier1_compliance_success():
