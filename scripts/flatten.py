@@ -131,9 +131,8 @@ def _ensure_newline(line: str) -> str:
 
 
 def _note_key(hid, note: dict) -> tuple:
-    """Dedupe key for a note: its id, else (timestamp, note text) —
-    the API permits id-less notes carrying only those fields."""
-    return (hid, note.get("id") or (note.get("timestamp"), note.get("note")))
+    """Dedupe key for a note: its id, else (created, description)."""
+    return (hid, note.get("id") or (note.get("created"), note.get("description")))
 
 
 def _copy_existing_notes(fh, existing_target: Path, seen_notes: set) -> int:
