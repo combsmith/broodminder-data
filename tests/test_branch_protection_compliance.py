@@ -292,31 +292,21 @@ def test_branch_protection_tier1_rules_live():
     request_params: dict = {"per_page": 100}
 
     while next_url is not None and matching_ruleset is None:
-        try:
-            listing = httpx.get(
-                next_url,
-                headers=headers,
-                params=request_params,
-                timeout=15,
-            )
-        except httpx.HTTPError as exc:
-            pytest.fail(f"could not reach GitHub API listing rulesets: {exc}")
+        listing = httpx.get(
+            next_url,
+            headers=headers,
+            params=request_params,
+            timeout=15,
+        )
+        assert listing.status_code == 200, (
+            f"GitHub API returned HTTP {listing.status_code} listing {REPO_SLUG} rulesets"
+        )
 
-        if listing.status_code != 200:
-            pytest.fail(
-                f"GitHub API returned HTTP {listing.status_code} listing {REPO_SLUG} rulesets"
-            )
-
-        try:
-            listing_data = listing.json()
-        except Exception as exc:
-            pytest.fail(f"could not parse ruleset listing JSON: {exc}")
-
-        if not isinstance(listing_data, list):
-            pytest.fail(
-                f"unexpected API response format for rulesets listing "
-                f"(expected list, got {type(listing_data).__name__})"
-            )
+        listing_data = listing.json()
+        assert isinstance(listing_data, list), (
+            f"unexpected API response format for rulesets listing "
+            f"(expected list, got {type(listing_data).__name__})"
+        )
 
         matching_ruleset = next(
             (r for r in listing_data if isinstance(r, dict) and r.get("name") == RULESET_NAME),
@@ -340,27 +330,21 @@ def test_branch_protection_tier1_rules_live():
     )
 
     ruleset_id = matching_ruleset.get("id")
-    if ruleset_id is None:
-        pytest.fail(f"ruleset '{RULESET_NAME}' found but is missing an 'id' field")
+    assert ruleset_id is not None, f"ruleset '{RULESET_NAME}' found but is missing an 'id' field"
 
-    try:
-        detail = httpx.get(
-            f"https://api.github.com/repos/{REPO_SLUG}/rulesets/{ruleset_id}",
-            headers=headers,
-            timeout=15,
-        )
-    except httpx.HTTPError as exc:
-        pytest.fail(f"could not reach GitHub API fetching ruleset detail: {exc}")
+    detail = httpx.get(
+        f"https://api.github.com/repos/{REPO_SLUG}/rulesets/{ruleset_id}",
+        headers=headers,
+        timeout=15,
+    )
+    assert detail.status_code == 200, (
+        f"could not read `{RULESET_NAME}` ruleset detail (HTTP {detail.status_code})"
+    )
 
-    if detail.status_code != 200:
-        pytest.fail(
-            f"could not read `{RULESET_NAME}` ruleset detail (HTTP {detail.status_code})"
-        )
-
-    try:
-        detail_json = detail.json()
-    except Exception as exc:
-        pytest.fail(f"could not parse ruleset detail JSON: {exc}")
+    detail_json = detail.json()
+    assert isinstance(detail_json, dict), (
+        f"unexpected detail response format: {type(detail_json).__name__}"
+    )
 
     # Validate active enforcement and branch applicability
     assert detail_json.get("enforcement", "").lower() == "active", (
