@@ -38,7 +38,7 @@ def load_json(path: Path) -> Any:
 
 
 def hive_meta(manifest: dict) -> dict:
-    meta = {}
+    meta: dict[str, dict[str, Any]] = {}
     for key, rec in manifest.get("completed", {}).items():
         hid = key.rsplit("|", 2)[0]  # hive IDs may themselves contain "|"
         meta.setdefault(hid, {"apiaryName": rec.get("apiaryName"),
@@ -188,6 +188,7 @@ def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, ex
     seen_notes: set = set()
     with path.open("w", encoding="utf-8") as fh:
         if merge and _nonempty(existing_target):
+            assert existing_target is not None
             n_notes += _copy_existing_notes(existing_target, fh, seen_notes)
         if raw.exists():
             n_notes += _write_raw_notes(raw, meta, completed_only, fh, seen_notes, windows)
@@ -227,14 +228,14 @@ def collect_metric_keys(args: argparse.Namespace, target_ndjson: Path, meta: dic
     return metric_keys
 
 
-def emit_row(row: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: dict) -> None:
+def emit_row(row: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: defaultdict) -> None:
     ndjson_fh.write(json.dumps(row) + "\n")
     if csv_writer:
         csv_writer.writerow({k: row.get(k) for k in cols})
     accumulate_coverage(coverage, row)
 
 
-def replay_existing_readings(target_ndjson: Path, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: dict, seen: dict) -> int:
+def replay_existing_readings(target_ndjson: Path, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: defaultdict, seen: dict) -> int:
     n = 0
     with gzip.open(target_ndjson, "rt", encoding="utf-8") as in_fh:
         for line in in_fh:
@@ -248,7 +249,7 @@ def replay_existing_readings(target_ndjson: Path, ndjson_fh: TextIO, csv_writer:
     return n
 
 
-def write_raw_readings(args: argparse.Namespace, meta: dict, seen: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: dict,
+def write_raw_readings(args: argparse.Namespace, meta: dict, seen: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: defaultdict,
                        windows: dict | None = None) -> int:
     n = 0
     for hdir in sorted(RAW.iterdir()):
@@ -290,7 +291,7 @@ def main() -> int:
 
     metric_cols = [f"m_{k}" for k in sorted(metric_keys)]
 
-    coverage = defaultdict(lambda: {"rows": 0, "min_ts": None, "max_ts": None,
+    coverage: defaultdict[str, dict[str, Any]] = defaultdict(lambda: {"rows": 0, "min_ts": None, "max_ts": None,
                                     "devices": set(), "positions": set()})
     seen: dict[str, set] = defaultdict(set)
     n_rows = 0
