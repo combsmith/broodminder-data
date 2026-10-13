@@ -22,8 +22,8 @@ Ref: issue #29 (Scorecard: Branch-Protection 0/10 -> 8/10)
 
 from __future__ import annotations
 
-import fnmatch
 import os
+import re
 
 import pytest
 
@@ -67,25 +67,84 @@ def extract_rule_types(ruleset_json: dict) -> set[str]:
     }
 
 
-def _ref_matches_pattern(ref: str, pattern: str) -> bool:
-    """Return whether ref matches GitHub ruleset ref pattern using fnmatch or keywords."""
+def _fnmatch_github_path(ref: str, pattern: str) -> bool:
+    """Match a ref against a GitHub ruleset fnmatch pattern with path-aware semantics.
+
+    In GitHub ruleset fnmatch syntax:
+    - '*' matches any character except '/'
+    - '**' matches any character including '/'
+    - '?' matches any single character except '/'
+    - character classes '[...]' match specified characters
+    """
+    i = 0
+    n = len(pattern)
+    res: list[str] = []
+    while i < n:
+        c = pattern[i]
+        if c == "*":
+            if i + 1 < n and pattern[i + 1] == "*":
+                res.append(".*")
+                i += 2
+            else:
+                res.append("[^/]*")
+                i += 1
+        elif c == "?":
+            res.append("[^/]")
+            i += 1
+        elif c == "[":
+            j = i + 1
+            if j < n and pattern[j] == "!":
+                j += 1
+            if j < n and pattern[j] == "]":
+                j += 1
+            while j < n and pattern[j] != "]":
+                j += 1
+            if j >= n:
+                res.append(re.escape(c))
+                i += 1
+            else:
+                stuff = pattern[i + 1:j]
+                i = j + 1
+                if stuff.startswith("!"):
+                    stuff = "^" + stuff[1:]
+                elif stuff.startswith("^"):
+                    stuff = "\\" + stuff
+                res.append(f"[{stuff}]")
+        else:
+            res.append(re.escape(c))
+            i += 1
+    regex = "^" + "".join(res) + "$"
+    return bool(re.match(regex, ref))
+
+
+def _ref_matches_pattern(ref: str, pattern: str, default_branch: str = "main") -> bool:
+    """Return whether ref matches GitHub ruleset ref pattern using path-aware fnmatch syntax."""
     if pattern == "~ALL":
         return True
     if pattern == "~DEFAULT_BRANCH":
-        return ref in ("main", "refs/heads/main", "~DEFAULT_BRANCH")
-    if fnmatch.fnmatch(ref, pattern):
+        return ref in (default_branch, f"refs/heads/{default_branch}", "~DEFAULT_BRANCH")
+    if _fnmatch_github_path(ref, pattern):
         return True
-    if not pattern.startswith("refs/") and fnmatch.fnmatch(ref, f"refs/heads/{pattern}"):
+    if not pattern.startswith("refs/") and _fnmatch_github_path(ref, f"refs/heads/{pattern}"):
         return True
-    if ref.startswith("refs/heads/") and fnmatch.fnmatch(ref[len("refs/heads/"):], pattern):
+    if ref.startswith("refs/heads/") and _fnmatch_github_path(ref[len("refs/heads/"):], pattern):
         return True
     return False
 
 
-def ruleset_targets_default_branch(ruleset_json: dict) -> bool:
-    """Check whether a ruleset targets the default branch and does not exclude it."""
+def ruleset_targets_default_branch(ruleset_json: dict, default_branch: str = "main") -> bool:
+    """Check whether a ruleset targets the default branch and does not exclude it.
+
+    Fails closed:
+    - Rejects payloads unless top-level target is 'branch'.
+    - Rejects payloads if exclude patterns match the default branch.
+    - Accepts payloads only if include patterns match the default branch.
+    """
     if not isinstance(ruleset_json, dict):
         return False
+    if str(ruleset_json.get("target", "")).lower() != "branch":
+        return False
+
     conditions = ruleset_json.get("conditions")
     if not isinstance(conditions, dict):
         return False
@@ -96,23 +155,27 @@ def ruleset_targets_default_branch(ruleset_json: dict) -> bool:
     if not isinstance(include, list):
         return False
     exclude = ref_name.get("exclude")
+
+    target_refs = (f"refs/heads/{default_branch}", default_branch)
     if isinstance(exclude, list):
         for pattern in exclude:
-            if isinstance(pattern, str) and (
-                _ref_matches_pattern("refs/heads/main", pattern)
-                or _ref_matches_pattern("main", pattern)
+            if isinstance(pattern, str) and any(
+                _ref_matches_pattern(ref, pattern, default_branch=default_branch)
+                for ref in target_refs
             ):
                 return False
     for pattern in include:
-        if isinstance(pattern, str) and (
-            _ref_matches_pattern("refs/heads/main", pattern)
-            or _ref_matches_pattern("main", pattern)
+        if isinstance(pattern, str) and any(
+            _ref_matches_pattern(ref, pattern, default_branch=default_branch)
+            for ref in target_refs
         ):
             return True
     return False
 
 
-def evaluate_scorecard_tier1_compliance(rulesets_json: list[dict]) -> tuple[bool, list[str]]:
+def evaluate_scorecard_tier1_compliance(
+    rulesets_json: list[dict], default_branch: str = "main"
+) -> tuple[bool, list[str]]:
     """Evaluate whether the given active rulesets satisfy OpenSSF Scorecard Tier 1.
 
     Scorecard Tier 1 mandates blocking deletions and non-fast-forward updates (force pushes).
@@ -124,7 +187,7 @@ def evaluate_scorecard_tier1_compliance(rulesets_json: list[dict]) -> tuple[bool
     found_rules: set[str] = set()
     for rs in rulesets_json:
         if isinstance(rs, dict) and rs.get("enforcement", "").lower() == "active":
-            if ruleset_targets_default_branch(rs):
+            if ruleset_targets_default_branch(rs, default_branch=default_branch):
                 found_rules.update(extract_rule_types(rs))
 
     missing = [req for req in REQUIRED_RULE_TYPES if req not in found_rules]
@@ -186,16 +249,20 @@ def test_extract_rule_types():
 def test_ruleset_targets_default_branch():
     """Verify ruleset_targets_default_branch identifies default branch targeting conditions."""
     rs_default = {
-        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}}
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
     }
     rs_main = {
-        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}}
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs/heads/main"], "exclude": []}},
     }
     rs_other = {
-        "conditions": {"ref_name": {"include": ["refs/heads/feature/*"], "exclude": []}}
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs/heads/feature/*"], "exclude": []}},
     }
     rs_all = {
-        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}}
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
     }
     assert ruleset_targets_default_branch(rs_default) is True
     assert ruleset_targets_default_branch(rs_main) is True
@@ -204,17 +271,66 @@ def test_ruleset_targets_default_branch():
     assert ruleset_targets_default_branch({}) is False
 
 
+def test_ruleset_targets_default_branch_rejects_non_branch_target():
+    """Verify ruleset_targets_default_branch rejects rulesets targeting tags or missing target."""
+    rs_tag = {
+        "target": "tag",
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
+    }
+    rs_push = {
+        "target": "push",
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
+    }
+    rs_no_target = {
+        "conditions": {"ref_name": {"include": ["~ALL"], "exclude": []}},
+    }
+    assert ruleset_targets_default_branch(rs_tag) is False
+    assert ruleset_targets_default_branch(rs_push) is False
+    assert ruleset_targets_default_branch(rs_no_target) is False
+
+
+def test_ruleset_targets_default_branch_custom_default_branch():
+    """Verify ruleset_targets_default_branch supports resolving custom repository default branches."""
+    rs_trunk = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs/heads/trunk"], "exclude": []}},
+    }
+    rs_keyword = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+    }
+    assert ruleset_targets_default_branch(rs_trunk, default_branch="trunk") is True
+    assert ruleset_targets_default_branch(rs_trunk, default_branch="main") is False
+    assert ruleset_targets_default_branch(rs_keyword, default_branch="trunk") is True
+
+
+def test_ruleset_targets_default_branch_path_aware_fnmatch():
+    """Verify single asterisk does not cross slashes whereas double asterisk does."""
+    rs_single_star_cross_dir = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs/*"], "exclude": []}},
+    }
+    rs_double_star_cross_dir = {
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["refs/**"], "exclude": []}},
+    }
+    assert ruleset_targets_default_branch(rs_single_star_cross_dir) is False
+    assert ruleset_targets_default_branch(rs_double_star_cross_dir) is True
+
+
 def test_ruleset_targets_default_branch_rejects_excluded_main():
     """Verify ruleset_targets_default_branch rejects rulesets that explicitly exclude main."""
     rs_excluded_main = {
+        "target": "branch",
         "conditions": {
             "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/main"]}
-        }
+        },
     }
     rs_excluded_default = {
+        "target": "branch",
         "conditions": {
             "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": ["~DEFAULT_BRANCH"]}
-        }
+        },
     }
     assert ruleset_targets_default_branch(rs_excluded_main) is False
     assert ruleset_targets_default_branch(rs_excluded_default) is False
@@ -223,19 +339,22 @@ def test_ruleset_targets_default_branch_rejects_excluded_main():
 def test_ruleset_targets_default_branch_rejects_fnmatch_pattern_exclusions():
     """Verify ruleset_targets_default_branch rejects rulesets with fnmatch wildcard exclusions matching main."""
     rs_prefix_wildcard = {
+        "target": "branch",
         "conditions": {
             "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/ma*"]}
-        }
+        },
     }
     rs_short_wildcard = {
+        "target": "branch",
         "conditions": {
             "ref_name": {"include": ["~ALL"], "exclude": ["ma*"]}
-        }
+        },
     }
     rs_all_branches_wildcard = {
+        "target": "branch",
         "conditions": {
             "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/*"]}
-        }
+        },
     }
     assert ruleset_targets_default_branch(rs_prefix_wildcard) is False
     assert ruleset_targets_default_branch(rs_short_wildcard) is False
@@ -245,14 +364,16 @@ def test_ruleset_targets_default_branch_rejects_fnmatch_pattern_exclusions():
 def test_ruleset_targets_default_branch_accepts_fnmatch_pattern_inclusions():
     """Verify ruleset_targets_default_branch accepts rulesets with fnmatch wildcard inclusions matching main."""
     rs_prefix_wildcard = {
+        "target": "branch",
         "conditions": {
             "ref_name": {"include": ["refs/heads/ma*"], "exclude": []}
-        }
+        },
     }
     rs_all_branches_wildcard = {
+        "target": "branch",
         "conditions": {
             "ref_name": {"include": ["refs/heads/*"], "exclude": []}
-        }
+        },
     }
     assert ruleset_targets_default_branch(rs_prefix_wildcard) is True
     assert ruleset_targets_default_branch(rs_all_branches_wildcard) is True
@@ -263,6 +384,7 @@ def test_evaluate_scorecard_tier1_compliance_success():
     rulesets = [
         {
             "name": RULESET_NAME,
+            "target": "branch",
             "enforcement": "active",
             "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
             "rules": [
@@ -282,6 +404,7 @@ def test_evaluate_scorecard_tier1_compliance_missing_deletion():
     rulesets = [
         {
             "name": RULESET_NAME,
+            "target": "branch",
             "enforcement": "active",
             "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
             "rules": [
@@ -300,6 +423,7 @@ def test_evaluate_scorecard_tier1_compliance_missing_non_fast_forward():
     rulesets = [
         {
             "name": RULESET_NAME,
+            "target": "branch",
             "enforcement": "active",
             "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
             "rules": [
@@ -318,6 +442,7 @@ def test_evaluate_scorecard_tier1_compliance_inactive_ruleset():
     rulesets = [
         {
             "name": RULESET_NAME,
+            "target": "branch",
             "enforcement": "disabled",
             "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
             "rules": [
@@ -359,6 +484,19 @@ def test_branch_protection_tier1_rules_live():
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+
+    # Resolve repository default branch
+    repo_resp = httpx.get(
+        f"https://api.github.com/repos/{REPO_SLUG}",
+        headers=headers,
+        timeout=15,
+    )
+    assert repo_resp.status_code == 200, (
+        f"GitHub API returned HTTP {repo_resp.status_code} fetching {REPO_SLUG} metadata"
+    )
+    repo_meta = repo_resp.json()
+    assert isinstance(repo_meta, dict), f"unexpected repo metadata format: {type(repo_meta).__name__}"
+    default_branch = repo_meta.get("default_branch", "main")
 
     # Follow Link header pagination across all pages to locate RULESET_NAME
     matching_ruleset = None
@@ -420,12 +558,15 @@ def test_branch_protection_tier1_rules_live():
         f"unexpected detail response format: {type(detail_json).__name__}"
     )
 
-    # Validate active enforcement and branch applicability
+    # Validate active enforcement, branch target, and branch applicability
     assert detail_json.get("enforcement", "").lower() == "active", (
         f"`{RULESET_NAME}` ruleset enforcement must be 'active', got {detail_json.get('enforcement')!r}"
     )
-    assert ruleset_targets_default_branch(detail_json) is True, (
-        f"`{RULESET_NAME}` ruleset must target default branch without excluding it"
+    assert detail_json.get("target", "").lower() == "branch", (
+        f"`{RULESET_NAME}` ruleset target must be 'branch', got {detail_json.get('target')!r}"
+    )
+    assert ruleset_targets_default_branch(detail_json, default_branch=default_branch) is True, (
+        f"`{RULESET_NAME}` ruleset must target default branch '{default_branch}' without excluding it"
     )
 
     # Validate required Tier 1 rules
