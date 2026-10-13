@@ -152,10 +152,12 @@ def _copy_existing_notes(fh, existing_target: Path, seen_notes: set) -> int:
     return n_notes
 
 
-def _iter_raw_notes(raw: Path):
+def _iter_raw_notes(raw: Path, meta: dict | None = None, completed_only: bool = False):
     """Yield (hiveId, note) for every note in the raw tree."""
     for hdir in sorted(raw.iterdir()):
         if not hdir.is_dir():
+            continue
+        if completed_only and hdir.name not in (meta or {}):
             continue
         for f in iter_note_files(hdir):
             payload = load_json(f)
@@ -164,7 +166,8 @@ def _iter_raw_notes(raw: Path):
                 yield hdir.name, n
 
 
-def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, existing_target: Path | None = None) -> int:
+def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, existing_target: Path | None = None,
+                completed_only: bool = False) -> int:
     """Notes are small — flatten them to plain ndjson. Returns the row count."""
     n_notes = 0
     seen_notes: set = set()
@@ -173,7 +176,7 @@ def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, ex
             n_notes += _copy_existing_notes(fh, existing_target, seen_notes)
 
         if raw.exists():
-            for hid, n in _iter_raw_notes(raw):
+            for hid, n in _iter_raw_notes(raw, meta, completed_only):
                 nk = _note_key(hid, n)
                 if nk in seen_notes:
                     continue
@@ -257,9 +260,12 @@ def _stream_existing_readings(sink: _ReadingsSink, target_ndjson: Path, seen: di
             sink.emit(_ensure_newline(line), row)
 
 
-def _stream_raw_readings(sink: _ReadingsSink, meta: dict, seen: dict, merge: bool) -> None:
+def _stream_raw_readings(sink: _ReadingsSink, meta: dict, seen: dict, merge: bool,
+                         completed_only: bool = False) -> None:
     for hdir in sorted(RAW.iterdir()):
         if not hdir.is_dir():
+            continue
+        if completed_only and hdir.name not in meta:
             continue
         hive_seen = seen[hdir.name] if merge else None
         for row in iter_hive_rows(hdir, meta.get(hdir.name, {}), hive_seen):
@@ -287,7 +293,7 @@ def _write_readings(args, meta: dict, metric_cols: list[str],
         if args.merge and _has_content(target_ndjson):
             _stream_existing_readings(sink, target_ndjson, seen)
         if RAW.exists():
-            _stream_raw_readings(sink, meta, seen, args.merge)
+            _stream_raw_readings(sink, meta, seen, args.merge, args.completed_only)
         readings_success = True
     finally:
         ndjson_fh.close()
@@ -304,12 +310,13 @@ def _write_readings(args, meta: dict, metric_cols: list[str],
     return sink
 
 
-def _write_notes_atomic(meta: dict, merge: bool, target_notes: Path) -> int:
+def _write_notes_atomic(meta: dict, merge: bool, target_notes: Path, completed_only: bool = False) -> int:
     """Write notes to a tmp file, then atomically replace the target."""
     tmp_notes = OUT / f"notes.ndjson.tmp.{os.getpid()}"
     notes_success = False
     try:
-        n_notes = write_notes(tmp_notes, meta, raw=RAW, merge=merge, existing_target=target_notes)
+        n_notes = write_notes(tmp_notes, meta, raw=RAW, merge=merge, existing_target=target_notes,
+                             completed_only=completed_only)
         notes_success = True
     finally:
         if not notes_success and tmp_notes.exists():
@@ -325,6 +332,8 @@ def main() -> int:
     ap.add_argument("--no-csv", action="store_true", help="skip the (large) CSV output")
     ap.add_argument("--merge", action="store_true",
                     help="merge incremental raw windows into existing readings and notes outputs")
+    ap.add_argument("--completed-only", action="store_true",
+                    help="skip raw hive dirs with no completed manifest entry (their metadata is unknown)")
     args = ap.parse_args()
 
     if not RAW.exists() and not args.merge:
@@ -342,7 +351,7 @@ def main() -> int:
     metric_cols = [f"m_{k}" for k in sorted(metric_keys)]
 
     sink = _write_readings(args, meta, metric_cols, target_ndjson, target_csv)
-    n_notes = _write_notes_atomic(meta, args.merge, target_notes)
+    n_notes = _write_notes_atomic(meta, args.merge, target_notes, args.completed_only)
 
     cov_out = build_coverage(sink.coverage, meta)
     (OUT / "coverage.json").write_text(json.dumps(cov_out, indent=2))
