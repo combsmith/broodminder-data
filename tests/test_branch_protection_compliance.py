@@ -76,6 +76,7 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
     - '/**/*' matches recursively across nested path segments
     - bare '**' matches within a single path segment ('[^/]*') and cannot cross multiple '/' separators
     - '?' matches any single character except '/'
+    - backslash escapes like '\\c' match literal 'c' both outside and inside character classes
     - character classes '[...]' match specified characters excluding '/' (FNM_PATHNAME restriction)
     """
     i = 0
@@ -99,7 +100,15 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
             i += 2
             continue
         c = pattern[i]
-        if c == "*":
+        if c == "\\":
+            if i + 1 < n:
+                res.append(re.escape(pattern[i + 1]))
+                i += 2
+            else:
+                res.append(re.escape("\\"))
+                i += 1
+            continue
+        elif c == "*":
             res.append("[^/]*")
             i += 1
         elif c == "?":
@@ -111,7 +120,12 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
                 j += 1
             if j < n and pattern[j] == "]":
                 j += 1
-            while j < n and pattern[j] != "]":
+            while j < n:
+                if pattern[j] == "\\":
+                    j += 2
+                    continue
+                if pattern[j] == "]":
+                    break
                 j += 1
             if j >= n:
                 res.append(re.escape(c))
@@ -120,8 +134,37 @@ def _fnmatch_github_path(ref: str, pattern: str) -> bool:
                 stuff = pattern[i + 1:j]
                 i = j + 1
                 if stuff.startswith("!") or stuff.startswith("^"):
-                    stuff = "^" + stuff[1:]
-                res.append(f"(?![/])[{stuff}]")
+                    is_negated = True
+                    inner = stuff[1:]
+                else:
+                    is_negated = False
+                    inner = stuff
+                k = 0
+                m = len(inner)
+                inner_res = []
+                while k < m:
+                    ch = inner[k]
+                    if ch == "\\":
+                        if k + 1 < m:
+                            next_ch = inner[k + 1]
+                            if next_ch in ("]", "\\", "-", "^"):
+                                inner_res.append("\\" + next_ch)
+                            else:
+                                inner_res.append(re.escape(next_ch))
+                            k += 2
+                            continue
+                        else:
+                            inner_res.append(r"\\")
+                            k += 1
+                            continue
+                    if ch in ("]", "\\", "^"):
+                        inner_res.append("\\" + ch)
+                    else:
+                        inner_res.append(ch)
+                    k += 1
+                class_body = "".join(inner_res)
+                neg_prefix = "^" if is_negated else ""
+                res.append(f"(?![/])[{neg_prefix}{class_body}]")
         else:
             res.append(re.escape(c))
             i += 1
@@ -470,6 +513,43 @@ def test_ruleset_targets_default_branch_accepts_caret_negation_inclusion():
         },
     }
     assert ruleset_targets_default_branch(rs_caret_include) is True
+
+
+def test_ruleset_targets_default_branch_rejects_backslash_escaped_exclusion():
+    """Verify backslash-escaped pattern in exclusion properly matches and excludes default branch."""
+    rs_escaped_exclude = {
+        "target": "branch",
+        "conditions": {
+            "ref_name": {"include": ["~ALL"], "exclude": [r"refs/heads/m\ain"]}
+        },
+    }
+    assert ruleset_targets_default_branch(rs_escaped_exclude) is False
+
+
+def test_ruleset_targets_default_branch_accepts_backslash_escaped_inclusion():
+    """Verify backslash-escaped pattern in inclusion properly matches and includes default branch."""
+    rs_escaped_include = {
+        "target": "branch",
+        "conditions": {
+            "ref_name": {"include": [r"refs/heads/m\ain"], "exclude": []}
+        },
+    }
+    assert ruleset_targets_default_branch(rs_escaped_include) is True
+
+
+def test_ruleset_targets_default_branch_character_class_escapes():
+    """Verify backslash escapes inside character classes are honored per Ruby fnmatch."""
+    # Escaped letter inside class matches
+    assert _fnmatch_github_path("refs/heads/main", r"refs/heads/m[\a]in") is True
+    # Escaped hyphen prevents range interpretation
+    assert _fnmatch_github_path("m-in", r"m[a\-c]in") is True
+    assert _fnmatch_github_path("mbin", r"m[a\-c]in") is False
+    # Escaped bracket inside class matches literal bracket
+    assert _fnmatch_github_path("m]in", r"m[\]]in") is True
+    # Escaped caret inside class is not negation
+    assert _fnmatch_github_path("main", r"m[\^x]in") is False
+    assert _fnmatch_github_path("m^in", r"m[\^x]in") is True
+
 
 
 def test_evaluate_scorecard_tier1_compliance_multiple_same_named_rulesets():
