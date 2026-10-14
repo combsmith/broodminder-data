@@ -19,6 +19,7 @@ LOCKFILE="$DIR/data/.sync.lock"
 cd "$DIR" || exit 1
 [[ -x "$PY" ]] || PY="python3"
 
+# Output the current UTC timestamp in ISO 8601 format.
 ts() {
     date -u +%Y-%m-%dT%H:%M:%SZ
 }
