@@ -18,7 +18,7 @@ A ruleset lives in the GitHub control plane, not on disk, so there is nothing
 static to assert against; the live half is the real drift guard and the offline
 predicate gives it teeth. This is a regression guard for issue #91.
 
-Ref: petry-projects/.github/standards/github-settings.md#pr-quality--standard-ruleset-all-repositories
+Ref: combsmith/.github/standards/github-settings.md#pr-quality--standard-ruleset-all-repositories
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import pytest
 # so exempt from the BROODMINDER_API_KEY blanket skip.
 pytestmark = pytest.mark.compliance
 
-REPO_SLUG = os.environ.get("GITHUB_REPOSITORY", "petry-projects/broodminder-data")
+REPO_SLUG = os.environ.get("GITHUB_REPOSITORY", "combsmith/broodminder-data")
 
 # The codified `pr-quality` ruleset name and the required pull-request parameter.
 RULESET_NAME = "pr-quality"

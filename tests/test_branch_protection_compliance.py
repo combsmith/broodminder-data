@@ -16,7 +16,7 @@ Rulesets live in the GitHub control plane, not in a file inside this repo, so mi
     skipping gracefully when uncredentialed, and strictly failing on error when credentialed.
 
 Ref: https://github.com/ossf/scorecard/blob/main/docs/checks.md#branch-protection
-Ref: petry-projects/.github standards/github-settings.md#pr-quality--standard-ruleset-all-repositories
+Ref: combsmith/.github standards/github-settings.md#pr-quality--standard-ruleset-all-repositories
 Ref: issue #29 (Scorecard: Branch-Protection 0/10 -> 8/10)
 """
 
@@ -31,7 +31,7 @@ import pytest
 # so exempt from the BROODMINDER_API_KEY blanket skip.
 pytestmark = pytest.mark.compliance
 
-REPO_SLUG = os.environ.get("GITHUB_REPOSITORY", "petry-projects/broodminder-data")
+REPO_SLUG = os.environ.get("GITHUB_REPOSITORY", "combsmith/broodminder-data")
 RULESET_NAME = "pr-quality"
 REQUIRED_RULE_TYPES = ("deletion", "non_fast_forward")
 DEFAULT_BRANCH_TARGETS = ("~DEFAULT_BRANCH", "refs/heads/main", "main")
