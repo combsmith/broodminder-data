@@ -53,7 +53,10 @@ def hive_windows(manifest: dict) -> dict:
     """Map hive ID -> set of completed "<start>-<end>" window stems."""
     wins: dict[str, set[str]] = {}
     for key in manifest.get("completed", {}):
-        hid, s, e = key.rsplit("|", 2)
+        parts = key.rsplit("|", 2)
+        if len(parts) != 3:
+            continue  # tolerate malformed manifest keys
+        hid, s, e = parts
         wins.setdefault(hid, set()).add(f"{s}-{e}")
     return wins
 
