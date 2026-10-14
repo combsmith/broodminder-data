@@ -1,13 +1,13 @@
 # 🐝 broodminder-data
 
-[![CI](https://github.com/petry-projects/broodminder-data/actions/workflows/ci.yml/badge.svg)](https://github.com/petry-projects/broodminder-data/actions/workflows/ci.yml)
+[![CI](https://github.com/combsmith/broodminder-data/actions/workflows/ci.yml/badge.svg)](https://github.com/combsmith/broodminder-data/actions/workflows/ci.yml)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=petry-projects_broodminder-data&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=petry-projects_broodminder-data)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![PyPI version](https://img.shields.io/pypi/v/broodminder-data.svg)](https://pypi.org/project/broodminder-data/)
 [![OpenAPI 3.1](https://img.shields.io/badge/OpenAPI-3.1-brightgreen.svg)](openapi.yaml)
 [![MCP Ready](https://img.shields.io/badge/MCP-Ready-purple.svg)](https://modelcontextprotocol.io/)
-[![Contributing](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](https://github.com/petry-projects/.github/blob/main/CONTRIBUTING.md)
+[![Contributing](https://img.shields.io/badge/contributions-welcome-brightgreen.svg)](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md)
 
 **Make [BroodMinder](https://broodminder.com) beehive data easily accessible across diverse consumption use cases — bulk export, periodic delta sync, OpenAPI 3.1, and AI agents via MCP.**
 
@@ -51,10 +51,10 @@
 
 We are tracking each expanded capability in GitHub Discussions. Join the conversation:
 
-- 💬 [**Discussion #148: Periodic Delta Sync Engine for Incremental Telemetry & Continuous Ingestion**](https://github.com/petry-projects/broodminder-data/discussions/148)
-- 💬 [**Discussion #149: Published OpenAPI 3.1 Specification & Interactive Documentation (Redocly/Swagger)**](https://github.com/petry-projects/broodminder-data/discussions/149)
-- 💬 [**Discussion #150: Model Context Protocol (MCP) Server for Hive Monitoring & AI Agent Integration**](https://github.com/petry-projects/broodminder-data/discussions/150)
-- 💬 [**Discussion #151: Unified Python Client SDK and Standalone CLI Library**](https://github.com/petry-projects/broodminder-data/discussions/151)
+- 💬 [**Discussion #148: Periodic Delta Sync Engine for Incremental Telemetry & Continuous Ingestion**](https://github.com/combsmith/broodminder-data/discussions/148)
+- 💬 [**Discussion #149: Published OpenAPI 3.1 Specification & Interactive Documentation (Redocly/Swagger)**](https://github.com/combsmith/broodminder-data/discussions/149)
+- 💬 [**Discussion #150: Model Context Protocol (MCP) Server for Hive Monitoring & AI Agent Integration**](https://github.com/combsmith/broodminder-data/discussions/150)
+- 💬 [**Discussion #151: Unified Python Client SDK and Standalone CLI Library**](https://github.com/combsmith/broodminder-data/discussions/151)
 
 ---
 
@@ -145,7 +145,7 @@ pip install "broodminder-data[mcp]"
 
 ### From Source (Local Development)
 ```bash
-git clone https://github.com/petry-projects/broodminder-data.git
+git clone https://github.com/combsmith/broodminder-data.git
 cd broodminder-data
 
 python3 -m venv .venv
@@ -334,7 +334,7 @@ print(f"Fetched {len(readings)} readings")
 
 Releases publish directly from GitHub Actions without storing long-lived, sensitive API tokens:
 - GitHub Actions exchanges its cryptographic OIDC ID token with PyPI for a short-lived upload token.
-- PyPI validates the repository (`petry-projects/broodminder-data`), workflow (`publish.yml`), and environment (`pypi`).
+- PyPI validates the repository (`combsmith/broodminder-data`), workflow (`publish.yml`), and environment (`pypi`).
 
 ### 2. Onboarding Steps (First Release Setup)
 
@@ -342,7 +342,7 @@ Before publishing the first release, the account owner registers a **Pending Pub
 1. Log in to [pypi.org/manage/account/publishing/](https://pypi.org/manage/account/publishing/).
 2. Under **"Add a pending publisher"**, enter:
    - **PyPI Project Name:** `broodminder-data`
-   - **Owner:** `petry-projects`
+   - **Owner:** `combsmith`
    - **Repository name:** `broodminder-data`
    - **Workflow name:** `publish.yml`
    - **Environment name:** `pypi`
@@ -367,7 +367,7 @@ python scripts/pypi_onboard.py
 
 ## 📋 Changelog & Release Notes
 
-All notable changes across releases are documented in [CHANGELOG.md](https://github.com/petry-projects/broodminder-data/blob/main/CHANGELOG.md) following [Keep a Changelog](https://keepachangelog.com/) standards. Releases are also tagged and detailed on [GitHub Releases](https://github.com/petry-projects/broodminder-data/releases).
+All notable changes across releases are documented in [CHANGELOG.md](https://github.com/combsmith/broodminder-data/blob/main/CHANGELOG.md) following [Keep a Changelog](https://keepachangelog.com/) standards. Releases are also tagged and detailed on [GitHub Releases](https://github.com/combsmith/broodminder-data/releases).
 
 ---
 
@@ -470,8 +470,8 @@ For commercial inquiries, email [support@combsmith.com](mailto:support@combsmith
 
 ## Contributing
 
-See the [Contributing Guide](https://github.com/petry-projects/.github/blob/main/CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [Code of Conduct](CODE_OF_CONDUCT.md).
-Check out open [Discussions](https://github.com/petry-projects/broodminder-data/discussions) to weigh in on upcoming features and architectural decisions.
+See the [Contributing Guide](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [Code of Conduct](CODE_OF_CONDUCT.md).
+Check out open [Discussions](https://github.com/combsmith/broodminder-data/discussions) to weigh in on upcoming features and architectural decisions.
 
 ---
 

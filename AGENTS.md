@@ -4,7 +4,7 @@ This file defines project-specific development standards for **broodminder-data*
 It follows the [AGENTS.md convention](https://agents.md/) and extends the organization-wide engineering standards.
 
 > **Organization standards:** This repository inherits shared development and security standards from
-> [`petry-projects/.github/AGENTS.md`](https://github.com/petry-projects/.github/blob/main/AGENTS.md).
+> [`combsmith/.github/AGENTS.md`](https://github.com/combsmith/.github/blob/main/AGENTS.md).
 > Read that file before making changes that touch CI, agent configuration, repo settings, or labels.
 
 ---
@@ -94,6 +94,6 @@ broodminder-data/
 ## 6. PyPI Trusted Publishing & Release Standards
 
 - **Tokenless OIDC Publishing:** Packaging and releases publish via PyPI Trusted Publishing (`id-token: write`). Never store long-lived `PYPI_TOKEN` secrets in repository settings.
-- **Pending Publisher Registration:** Before the initial release, a pending publisher must be configured at `https://pypi.org/manage/account/publishing/` for PyPI project `broodminder-data`, owner `petry-projects`, repo `broodminder-data`, workflow `publish.yml`, environment `pypi`.
+- **Pending Publisher Registration:** Before the initial release, a pending publisher must be configured at `https://pypi.org/manage/account/publishing/` for PyPI project `broodminder-data`, owner `combsmith`, repo `broodminder-data`, workflow `publish.yml`, environment `pypi`.
 - **Automated On-Merge Release:** When PRs bumping `version` in `pyproject.toml` are merged to `main`, `publish.yml` detects that git tag `v<version>` does not exist, builds and verifies distributions with `twine check --strict`, publishes tokenlessly to PyPI over OIDC, and automatically creates the git tag and GitHub Release with generated notes. Ordinary commits/merges without a version bump gracefully skip publishing.
 - **Dry-Run Safety:** Manual release dispatches via `.github/workflows/publish.yml` default to `dry_run: true` so packages can be built, inspected, and validated with `twine check` before releasing.
