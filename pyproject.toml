@@ -43,12 +43,12 @@ dev = [
 broodminder-battery = "bm.battery:main"
 
 [project.urls]
-Homepage = "https://github.com/petry-projects/broodminder-data"
-Documentation = "https://github.com/petry-projects/broodminder-data#readme"
-Changelog = "https://github.com/petry-projects/broodminder-data/blob/main/CHANGELOG.md"
-Issues = "https://github.com/petry-projects/broodminder-data/issues"
-Discussions = "https://github.com/petry-projects/broodminder-data/discussions"
-Repository = "https://github.com/petry-projects/broodminder-data.git"
+Homepage = "https://github.com/combsmith/broodminder-data"
+Documentation = "https://github.com/combsmith/broodminder-data#readme"
+Changelog = "https://github.com/combsmith/broodminder-data/blob/main/CHANGELOG.md"
+Issues = "https://github.com/combsmith/broodminder-data/issues"
+Discussions = "https://github.com/combsmith/broodminder-data/discussions"
+Repository = "https://github.com/combsmith/broodminder-data.git"
 "Commercial Support" = "https://combsmith.com"
 
 [tool.setuptools]

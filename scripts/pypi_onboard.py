@@ -37,7 +37,7 @@ PENDING_PUBLISHER_HINT = (
     "1. Go to: https://pypi.org/manage/account/publishing/\n"
     "2. Fill in the 'Add a pending publisher' form:\n"
     f"   - PyPI Project Name: {PACKAGE_NAME}\n"
-    "   - Owner: petry-projects\n"
+    "   - Owner: combsmith\n"
     f"   - Repository name: {PACKAGE_NAME}\n"
     "   - Workflow name: publish.yml\n"
     "   - Environment name: pypi\n"
