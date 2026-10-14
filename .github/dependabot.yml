@@ -1,5 +1,5 @@
 # Dependabot configuration for Python repositories
-# (from petry-projects/.github standards/dependabot/backend-python.yml)
+# (from combsmith/.github standards/dependabot/backend-python.yml)
 #
 # pip uses open-pull-requests-limit: 0 to suppress version update PRs.
 # Dependabot security updates bypass this limit, so security PRs still open.

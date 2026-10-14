@@ -45,9 +45,9 @@ def test_pyproject_toml_structure():
     assert "Programming Language :: Python :: 3" in classifiers
 
     urls = project.get("urls", {})
-    assert "https://github.com/petry-projects/broodminder-data" in urls.get("Homepage", "")
-    assert "https://github.com/petry-projects/broodminder-data" in urls.get("Repository", "")
-    assert urls.get("Changelog") == "https://github.com/petry-projects/broodminder-data/blob/main/CHANGELOG.md"
+    assert "https://github.com/combsmith/broodminder-data" in urls.get("Homepage", "")
+    assert "https://github.com/combsmith/broodminder-data" in urls.get("Repository", "")
+    assert urls.get("Changelog") == "https://github.com/combsmith/broodminder-data/blob/main/CHANGELOG.md"
 
     opt_deps = project.get("optional-dependencies", {})
     assert "mcp" in opt_deps
@@ -140,7 +140,7 @@ def test_pypi_onboard_version_cli(capsys: pytest.CaptureFixture):
 
 def test_pending_publisher_hint_content():
     assert PACKAGE_NAME in PENDING_PUBLISHER_HINT
-    assert "petry-projects" in PENDING_PUBLISHER_HINT
+    assert "combsmith" in PENDING_PUBLISHER_HINT
     assert "publish.yml" in PENDING_PUBLISHER_HINT
     assert "pypi" in PENDING_PUBLISHER_HINT
 
