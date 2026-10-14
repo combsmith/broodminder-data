@@ -592,7 +592,8 @@ def test_find_sample_ids_device_from_later_hive():
 
 def test_note_key_prefers_id_then_created_description():
     assert flatten._note_key("H1", {"id": "N1", "created": 1}) == ("H1", "N1")
-    assert flatten._note_key("H1", {"created": 1, "description": "d"}) == ("H1", (1, "d"))
+    assert flatten._note_key("H1", {"created": 1, "description": "d"}) == ("H1", (1, "d", None))
+    assert flatten._note_key("H1", {"created": 1, "description": "d", "text": "content"}) == ("H1", (1, "d", "content"))
 
 
 def test_write_notes_merge_keeps_existing_and_dedupes(tmp_path):

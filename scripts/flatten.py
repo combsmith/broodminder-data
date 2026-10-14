@@ -131,8 +131,11 @@ def _ensure_newline(line: str) -> str:
 
 
 def _note_key(hid, note: dict) -> tuple:
-    """Dedupe key for a note: its id, else (created, description)."""
-    return (hid, note.get("id") or (note.get("created"), note.get("description")))
+    """Dedupe key for a note: its id, else (created, description, text)."""
+    if note.get("id"):
+        return (hid, note.get("id"))
+    note_text = note.get("text") or note.get("note")
+    return (hid, (note.get("created"), note.get("description"), note_text))
 
 
 def _copy_existing_notes(fh, existing_target: Path, seen_notes: set) -> int:
