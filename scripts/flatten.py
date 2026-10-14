@@ -31,6 +31,7 @@ RAW = OUT / "raw"
 
 
 def load_json(path: Path) -> Any:
+    """Load JSON from a file, handling gzipped (.gz) files transparently."""
     if path.suffix == ".gz":
         with gzip.open(path, "rt", encoding="utf-8") as fh:
             return json.load(fh)
@@ -38,6 +39,7 @@ def load_json(path: Path) -> Any:
 
 
 def hive_meta(manifest: dict) -> dict:
+    """Extract hive metadata (name, apiaryId, apiaryName) from the manifest."""
     meta: dict[str, dict[str, Any]] = {}
     for key, rec in manifest.get("completed", {}).items():
         hid = key.rsplit("|", 2)[0]  # hive IDs may themselves contain "|"
@@ -57,6 +59,7 @@ def hive_windows(manifest: dict) -> dict:
 
 
 def _window_ok(f: Path, allowed: set | None) -> bool:
+    """Check if a file's window stem is in the allowed set, or if no filter is applied."""
     return allowed is None or f.name.split(".", 1)[0] in allowed
 
 
@@ -67,6 +70,7 @@ def iter_reading_files(hdir: Path, allowed: set | None = None) -> list[Path]:
 
 
 def iter_note_files(hdir: Path, allowed: set | None = None) -> list[Path]:
+    """Notes windows for a hive, gz or plain; optionally only the completed windows."""
     files = sorted(list(hdir.glob("*.notes.json")) + list(hdir.glob("*.notes.json.gz")))
     return [f for f in files if _window_ok(f, allowed)]
 
@@ -140,6 +144,7 @@ def accumulate_coverage(coverage: defaultdict, row: dict) -> None:
 
 
 def _nonempty(path: Path | None) -> bool:
+    """Check if a path exists and is a non-empty file."""
     return path is not None and path.exists() and path.stat().st_size > 0
 
 
@@ -229,6 +234,7 @@ def collect_metric_keys(args: argparse.Namespace, target_ndjson: Path, meta: dic
 
 
 def emit_row(row: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: defaultdict) -> None:
+    """Write one output row to both ndjson and CSV (if enabled), and accumulate coverage stats."""
     ndjson_fh.write(json.dumps(row) + "\n")
     if csv_writer:
         csv_writer.writerow({k: row.get(k) for k in cols})
@@ -236,6 +242,7 @@ def emit_row(row: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage
 
 
 def replay_existing_readings(target_ndjson: Path, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: defaultdict, seen: dict) -> int:
+    """Copy existing readings from the archive to the new outputs and track what we've seen. Returns row count."""
     n = 0
     with gzip.open(target_ndjson, "rt", encoding="utf-8") as in_fh:
         for line in in_fh:
@@ -251,6 +258,7 @@ def replay_existing_readings(target_ndjson: Path, ndjson_fh: TextIO, csv_writer:
 
 def write_raw_readings(args: argparse.Namespace, meta: dict, seen: dict, ndjson_fh: TextIO, csv_writer: Any, cols: list, coverage: defaultdict,
                        windows: dict | None = None) -> int:
+    """Process all raw reading files and write output rows. Returns row count."""
     n = 0
     for hdir in sorted(RAW.iterdir()):
         if not hdir.is_dir() or (args.completed_only and hdir.name not in meta):
