@@ -56,6 +56,23 @@ def test_find_sample_ids_hive_without_devices():
     assert discover.find_sample_ids(apiaries) == ("H1", None)
 
 
+def test_find_sample_ids_scalar_payload_is_empty():
+    assert discover.find_sample_ids("oops") == (None, None)
+    assert discover.find_sample_ids(5) == (None, None)
+
+
+def test_stream_existing_readings_skips_blank_lines(tmp_path):
+    target = tmp_path / "readings.ndjson.gz"
+    row = {"hiveId": "H1", "positionID": "p", "deviceId": "d", "timestamp": 1}
+    with gzip.open(target, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(row) + "\n\n   \n")
+    sink = MagicMock()
+    seen = defaultdict(set)
+    flatten._stream_existing_readings(sink, target, seen)
+    assert sink.emit.call_count == 1
+    assert ("p", "d", 1) in seen["H1"]
+
+
 def test_find_sample_ids_empty():
     assert discover.find_sample_ids([]) == (None, None)
     assert discover.find_sample_ids({"apiaries": []}) == (None, None)

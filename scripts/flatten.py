@@ -247,6 +247,8 @@ def _stream_existing_readings(sink: _ReadingsSink, target_ndjson: Path, seen: di
     """Replay the prior archive into sink, recording its dedupe keys in seen."""
     with gzip.open(target_ndjson, "rt", encoding="utf-8") as in_fh:
         for line in in_fh:
+            if not line.strip():
+                continue
             row = json.loads(line)
             seen[row.get("hiveId")].add((row.get("positionID"), row.get("deviceId"), row.get("timestamp")))
             sink.emit(_ensure_newline(line), row)

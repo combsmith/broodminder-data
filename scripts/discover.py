@@ -34,7 +34,12 @@ def first(obj, *keys):
 
 def _iter_hives(apiaries):
     """Yield every hive in the tree, accepting a bare list or {"apiaries": [...]}."""
-    containers = apiaries if isinstance(apiaries, list) else (apiaries or {}).get("apiaries", [])
+    if isinstance(apiaries, list):
+        containers = apiaries
+    elif isinstance(apiaries, dict):
+        containers = apiaries.get("apiaries", [])
+    else:
+        containers = []
     for ap in containers or []:
         yield from first(ap, "hives") or []
 
