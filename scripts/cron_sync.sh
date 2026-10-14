@@ -21,6 +21,7 @@ cd "$DIR" || exit 1
 
 # Output the current UTC timestamp in ISO 8601 format.
 ts() {
+    # Output the current UTC timestamp in ISO 8601 format.
     date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
