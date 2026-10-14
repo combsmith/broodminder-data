@@ -477,4 +477,4 @@ Check out open [Discussions](https://github.com/combsmith/broodminder-data/discu
 
 ## License
 
-[MIT](LICENSE) © Petry Projects.
+[MIT](LICENSE) © CombSmith.
