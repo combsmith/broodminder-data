@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Enforced branch protection compliance on the default branch (`main`) by adding deletion prevention (`deletion`) and non-fast-forward/force-push blocking (`non_fast_forward`) rules to the `pr-quality` ruleset, elevating OpenSSF Scorecard Branch-Protection score from 0/10 to 8/10, and added regression test suite `tests/test_branch_protection_compliance.py` (#29).
+
 ## [0.1.7] - 2026-10-12
 
 ### Security
