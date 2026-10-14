@@ -31,6 +31,7 @@ RAW = OUT / "raw"
 
 
 def load_json(path: Path) -> Any:
+    """Load JSON from a file, handling gzipped (.gz) files transparently."""
     if path.suffix == ".gz":
         with gzip.open(path, "rt", encoding="utf-8") as fh:
             return json.load(fh)
@@ -38,6 +39,7 @@ def load_json(path: Path) -> Any:
 
 
 def hive_meta(manifest: dict) -> dict:
+    """Extract hive metadata (name, apiaryId, apiaryName) from the manifest."""
     meta: dict[str, dict[str, Any]] = {}
     for key, rec in manifest.get("completed", {}).items():
         hid = key.rsplit("|", 2)[0]  # hive IDs may themselves contain "|"
@@ -57,6 +59,7 @@ def hive_windows(manifest: dict) -> dict:
 
 
 def _window_ok(f: Path, allowed: set | None) -> bool:
+    """Check if a file's window stem is in the allowed set, or if no filter is applied."""
     return allowed is None or f.name.split(".", 1)[0] in allowed
 
 
@@ -67,6 +70,7 @@ def iter_reading_files(hdir: Path, allowed: set | None = None) -> list[Path]:
 
 
 def iter_note_files(hdir: Path, allowed: set | None = None) -> list[Path]:
+    """Notes windows for a hive, gz or plain; optionally only the completed windows."""
     files = sorted(list(hdir.glob("*.notes.json")) + list(hdir.glob("*.notes.json.gz")))
     return [f for f in files if _window_ok(f, allowed)]
 
