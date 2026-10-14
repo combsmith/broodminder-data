@@ -4,13 +4,13 @@ Enforces the org push-protection standard's `secret_scan_ci_job_present`
 requirement: the primary CI workflow must run gitleaks, and the repo must
 ship a root .gitleaks.toml so `--config .gitleaks.toml` resolves.
 
-Ref: petry-projects/.github/standards/push-protection.md#required-ci-job
+Ref: combsmith/.github/standards/push-protection.md#required-ci-job
 
 Also enforces the dev-lead caller-stub channel pin
 (`dev-lead-stub-agent-ref`): the stub must pass `with: agent_ref:
 dev-lead/<channel>` and pin the reusable's `uses:` ref to the same channel.
 
-Ref: petry-projects/.github/standards/ci-standards.md#dev-lead-agent
+Ref: combsmith/.github/standards/ci-standards.md#dev-lead-agent
 
 These are text-based checks so they run without extra dependencies (CI only
 installs requirements.txt, which has no YAML parser).
@@ -154,7 +154,7 @@ def test_dev_lead_uses_ref_matches_agent_ref():
     reusable checks out its own scripts/prompts from the channel it runs."""
     text = _dev_lead_text()
     uses = re.search(
-        r"^\s*uses:\s*['\"]?petry-projects/\.github-private/\.github/workflows/"
+        r"^\s*uses:\s*['\"]?combsmith/\.github-private/\.github/workflows/"
         r"dev-lead-reusable\.yml@([^'\"\s]+)['\"]?",
         text,
         re.MULTILINE,

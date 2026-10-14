@@ -1,14 +1,14 @@
 # Security Policy
 
 This policy applies to `broodminder-data` and aligns with the org-wide policy in
-[`petry-projects/.github`](https://github.com/petry-projects/.github/blob/main/SECURITY.md).
+[`combsmith/.github`](https://github.com/combsmith/.github/blob/main/SECURITY.md).
 
 ## Reporting a Vulnerability
 
 **Please do not open a public issue for security vulnerabilities.**
 
 Report privately via **GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)**:
-open [petry-projects/broodminder-data](https://github.com/petry-projects/broodminder-data) → **Security** tab → **[Report a vulnerability](https://github.com/petry-projects/broodminder-data/security/advisories/new)**.
+open [combsmith/broodminder-data](https://github.com/combsmith/broodminder-data) → **Security** tab → **[Report a vulnerability](https://github.com/combsmith/broodminder-data/security/advisories/new)**.
 
 If private vulnerability reporting is unavailable, email **<donpetry@gmail.com>**
 with the details and "SECURITY" in the subject.

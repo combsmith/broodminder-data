@@ -72,6 +72,6 @@ in `AGENTS.md`.
 
 ## Org Standards
 
-See [petry-projects/.github — AGENTS.md](https://github.com/petry-projects/.github/blob/main/AGENTS.md)
+See [combsmith/.github — AGENTS.md](https://github.com/combsmith/.github/blob/main/AGENTS.md)
 for org-wide development standards, and this repo's [`AGENTS.md`](../AGENTS.md) for
 any repo-specific notes.

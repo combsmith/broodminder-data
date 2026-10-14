@@ -29,7 +29,7 @@ import pytest
 # so exempt it from the BROODMINDER_API_KEY blanket skip.
 pytestmark = pytest.mark.compliance
 
-REPO_SLUG = os.environ.get("GITHUB_REPOSITORY", "petry-projects/broodminder-data")
+REPO_SLUG = os.environ.get("GITHUB_REPOSITORY", "combsmith/broodminder-data")
 RULESET_NAME = "pr-quality"
 PARAM = "require_last_push_approval"
 
@@ -194,5 +194,5 @@ def test_require_last_push_approval_enabled_live():
         f"`{PARAM}` must be enabled on the `{RULESET_NAME}` ruleset — after a "
         "reviewer approves, a subsequent push must be re-approved before merge "
         "(org rulesets standard, pr-quality). Converge with "
-        "`scripts/apply-rulesets.sh --repo petry-projects/broodminder-data`."
+        "`scripts/apply-rulesets.sh --repo combsmith/broodminder-data`."
     )

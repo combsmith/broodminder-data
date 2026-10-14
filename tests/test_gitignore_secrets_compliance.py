@@ -1,7 +1,7 @@
 """Compliance test for the `.gitignore` secrets baseline (`gitignore_secrets_block`).
 
 The org push-protection standard requires every repo to carry the managed
-"petry-projects secrets baseline" block in its `.gitignore` as the first layer of
+"combsmith secrets baseline" block in its `.gitignore` as the first layer of
 defense against committing credentials. Conformance is defined by the org
 gitignore-standard: the baseline lives between canonical BEGIN/END markers and the
 weekly compliance audit hash-matches the content between them.
@@ -11,8 +11,8 @@ flagged in issue #17) cannot silently disappear between audits. It is text-based
 it runs with only ``requirements.txt`` installed (no YAML parser needed), mirroring
 ``test_ci_compliance.py``.
 
-Ref: petry-projects/.github/standards/push-protection.md#required-gitignore-entries
-Ref: petry-projects/.github/standards/gitignore-standard.md
+Ref: combsmith/.github/standards/push-protection.md#required-gitignore-entries
+Ref: combsmith/.github/standards/gitignore-standard.md
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 GITIGNORE = ROOT / ".gitignore"
 
-BEGIN_MARKER = "# >>> BEGIN petry-projects secrets baseline (managed by .github — do not edit) >>>"
-END_MARKER = "# <<< END petry-projects secrets baseline <<<"
+BEGIN_MARKER = "# >>> BEGIN combsmith secrets baseline (managed by .github — do not edit) >>>"
+END_MARKER = "# <<< END combsmith secrets baseline <<<"
 
 # A representative core of the org baseline — one anchor per secret category —
 # always including `*.pem`, the pattern this issue was raised for. These are the
