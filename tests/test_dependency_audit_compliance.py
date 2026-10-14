@@ -3,7 +3,7 @@ workflow depends on.
 
 ``.github/workflows/dependency-audit.yml`` is a thin caller stub adopted verbatim
 from the org standards; all logic lives in the reusable workflow
-(``petry-projects/.github`` → ``dependency-audit-reusable.yml``). That reusable's
+(``combsmith/.github`` → ``dependency-audit-reusable.yml``). That reusable's
 ``pip-audit`` step installs its tooling with::
 
     pip install --require-hashes --only-binary :all: -r scripts/pip-audit-requirements.txt
@@ -24,7 +24,7 @@ It is text-based so it runs with only ``requirements.txt`` installed (no YAML or
 packaging parser needed), mirroring ``test_ci_compliance.py`` and
 ``test_gitignore_secrets_compliance.py``.
 
-Ref: petry-projects/.github/standards/ci-standards.md#7-dependency-audit-dependency-audityml
+Ref: combsmith/.github/standards/ci-standards.md#7-dependency-audit-dependency-audityml
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ DEPENDENCY_AUDIT_WORKFLOW = ROOT / ".github" / "workflows" / "dependency-audit.y
 # *all* its nested options (option → flow-list values); `None` marks a trigger with
 # no nested options at all.
 #
-# Ref: petry-projects/.github/standards/ci-standards.md#centralization-tiers
+# Ref: combsmith/.github/standards/ci-standards.md#centralization-tiers
 _CANONICAL_ON: dict[str, dict[str, list[str]] | None] = {
     "pull_request": {"branches": ["main"]},
     "push": {"branches": ["main"]},
@@ -389,7 +389,7 @@ def _on_triggers(text: str) -> dict[str, dict[str, list[str]] | None]:
 def test_dependency_audit_stub_on_surface_matches_standard():
     assert DEPENDENCY_AUDIT_WORKFLOW.exists(), (
         f"{DEPENDENCY_AUDIT_WORKFLOW} is missing — it is the thin caller stub "
-        "adopted verbatim from petry-projects/.github standards/workflows/"
+        "adopted verbatim from combsmith/.github standards/workflows/"
     )
     triggers = _on_triggers(DEPENDENCY_AUDIT_WORKFLOW.read_text(encoding="utf-8"))
     assert triggers == _CANONICAL_ON, (

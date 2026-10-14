@@ -14,7 +14,7 @@ OpenSSF Scorecard's Pinned-Dependencies evaluation probes and org standards:
    satisfies the first-party channel tag accepted exception (#709).
 
 Ref: https://github.com/ossf/scorecard/blob/main/checks/raw/shell_download_validate.go
-Ref: petry-projects/.github standards/ci-standards.md#openssf-scorecard-org-scorecardyml
+Ref: combsmith/.github standards/ci-standards.md#openssf-scorecard-org-scorecardyml
 Ref: issue #44 (Scorecard: Pinned-Dependencies 2/10)
 """
 

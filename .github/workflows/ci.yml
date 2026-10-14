@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# SOURCE OF TRUTH: petry-projects/.github/standards/workflows/ci.yml
-# Standard:        petry-projects/.github/standards/ci-standards.md#1-ci-pipeline-ciyml
+# SOURCE OF TRUTH: combsmith/.github/standards/workflows/ci.yml
+# Standard:        combsmith/.github/standards/ci-standards.md#1-ci-pipeline-ciyml
 #
 # Customized for this repo's stack: Python (compile + pytest). The required
 # status check job name `build-and-test` is preserved.

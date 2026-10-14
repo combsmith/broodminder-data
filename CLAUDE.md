@@ -1,1 +1,1 @@
-See [AGENTS.md](./AGENTS.md), which points to the org standards in `petry-projects/.github`.
+See [AGENTS.md](./AGENTS.md), which points to the org standards in `combsmith/.github`.
