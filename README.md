@@ -1,7 +1,7 @@
 # 🐝 broodminder-data
 
 [![CI](https://github.com/combsmith/broodminder-data/actions/workflows/ci.yml/badge.svg)](https://github.com/combsmith/broodminder-data/actions/workflows/ci.yml)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=petry-projects_broodminder-data&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=petry-projects_broodminder-data)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=combsmith_broodminder-data&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=combsmith_broodminder-data)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![PyPI version](https://img.shields.io/pypi/v/broodminder-data.svg)](https://pypi.org/project/broodminder-data/)
