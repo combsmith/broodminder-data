@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-10-13
+
 ### Security
 - Enforced branch protection compliance on the default branch (`main`) by adding deletion prevention (`deletion`) and non-fast-forward/force-push blocking (`non_fast_forward`) rules to the `pr-quality` ruleset, elevating OpenSSF Scorecard Branch-Protection score from 0/10 to 8/10, and added regression test suite `tests/test_branch_protection_compliance.py` (#29).
 
@@ -74,7 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Authoritative OpenAPI 3.1 specification for the External User API (`openapi/broodminder-openapi.yaml`) with Redocly linting and interactive docs preview.
 - PyPI onboarding probe, build verification, and Trusted Publishing OIDC workflow.
 
-[Unreleased]: https://github.com/combsmith/broodminder-data/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/combsmith/broodminder-data/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/combsmith/broodminder-data/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/combsmith/broodminder-data/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/combsmith/broodminder-data/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/combsmith/broodminder-data/compare/v0.1.4...v0.1.5
