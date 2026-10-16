@@ -443,3 +443,50 @@ def test_extract_all_catchup_roster_check(tmp_path, monkeypatch, capsys):
     assert "already up to date across all" not in captured.out
     assert calls["readings"] > 0
 
+
+
+def test_flatten_merge_completed_only_skips_unmanifested_hives(tmp_path, monkeypatch):
+    import scripts.flatten as fl
+
+    out_dir = tmp_path / "extract"
+    raw_dir = out_dir / "raw"
+    for hid in ("h1", "h2"):
+        (raw_dir / hid).mkdir(parents=True)
+        with gzip.open(raw_dir / hid / "1-2.readings.json.gz", "wt", encoding="utf-8") as fh:
+            json.dump([{"positionID": "p", "readings": [
+                {"deviceId": "d", "timestamp": 1, "readings": {"temperature": 70.0}}]}], fh)
+        (raw_dir / hid / "1-2.notes.json").write_text(json.dumps([{"id": f"n-{hid}"}]))
+    (out_dir / "manifest.json").write_text(json.dumps(
+        {"completed": {"h1|1|2": {"apiaryName": "A", "apiaryId": "a1", "hiveName": "H1"}}}))
+    monkeypatch.setattr(fl, "OUT", out_dir)
+    monkeypatch.setattr(fl, "RAW", raw_dir)
+
+    monkeypatch.setattr("sys.argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert fl.main() == 0
+
+    with gzip.open(out_dir / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        assert [json.loads(line)["hiveId"] for line in fh] == ["h1"]
+    notes = [json.loads(line)["hiveId"] for line in (out_dir / "notes.ndjson").read_text().splitlines()]
+    assert notes == ["h1"]
+
+
+def test_flatten_completed_only_skips_incomplete_windows_of_known_hive(tmp_path, monkeypatch):
+    import scripts.flatten as fl
+
+    out_dir = tmp_path / "extract"
+    hdir = out_dir / "raw" / "h1"
+    hdir.mkdir(parents=True)
+    with gzip.open(hdir / "1-2.readings.json.gz", "wt", encoding="utf-8") as fh:
+        json.dump([{"positionID": "p", "readings": [
+            {"deviceId": "d", "timestamp": 1, "readings": {"temperature": 70.0}}]}], fh)
+    (hdir / "2-3.readings.json.gz").write_bytes(b"truncated")  # failed mid-write, not in manifest
+    (hdir / "2-3.notes.json").write_text("{")
+    (out_dir / "manifest.json").write_text(json.dumps(
+        {"completed": {"h1|1|2": {"apiaryName": "A", "apiaryId": "a1", "hiveName": "H1"}}}))
+    monkeypatch.setattr(fl, "OUT", out_dir)
+    monkeypatch.setattr(fl, "RAW", out_dir / "raw")
+
+    monkeypatch.setattr("sys.argv", ["flatten.py", "--merge", "--completed-only"])
+    assert fl.main() == 0
+    with gzip.open(out_dir / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        assert [json.loads(line)["timestamp"] for line in fh] == [1]

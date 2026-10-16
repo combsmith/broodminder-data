@@ -548,3 +548,11 @@ def test_process_hive_stop_after_empty_fetch(tmp_path):
     extract_all.process_hive(bm, a, h, wins, args, tmp_path, completed, lambda: None)
     # After the first fetch with 0 rows, empties=1 >= limit=1 → break; second window never fetched
     assert bm.hive_readings.call_count == 1
+
+
+def test_hive_meta_preserves_pipe_in_hive_id():
+    manifest = {"completed": {
+        "hive|with|pipe|1000|4200": {"apiaryName": "N", "apiaryId": "A", "hiveName": "H"},
+    }}
+    meta = flatten.hive_meta(manifest)
+    assert list(meta) == ["hive|with|pipe"]
