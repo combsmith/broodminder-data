@@ -221,7 +221,7 @@ def process_hive(bm, a: dict, h: dict, wins: list, args, raw: Path,
             break  # next hive
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--start", default="2021-01-01", help="history start (YYYY-MM-DD)")
     p.add_argument("--end", default=None, help="history end (YYYY-MM-DD); default now")
@@ -239,7 +239,51 @@ def main() -> int:
                         "windows (saves calls on hives with no old data; 0=off)")
     p.add_argument("--catchup", action="store_true",
                    help="resume forward from each hive's latest completed window in manifest.json")
-    args = p.parse_args()
+    return p
+
+
+def _resolve_end(args) -> int:
+    """Explicit --end, else now snapped to midnight UTC.
+
+    Snapping makes re-runs within a day reuse the same window key (stable
+    resume; the live now-epoch would otherwise mint a new key each run and
+    re-fetch the final window). Today's partial data is picked up on the next
+    day's run.
+    """
+    if args.end:
+        return parse_date(args.end)
+    return now_epoch() // 86400 * 86400
+
+
+def _all_caught_up(manifest: dict, hives: list, start: int, end: int) -> bool:
+    """True when there are hives and every one has already been extracted through end."""
+    return bool(hives) and all(get_hive_resume_start(manifest, h["hiveId"], start) >= end
+                               for _a, h in hives)
+
+
+def _extract_hives(bm, hives: list, args, manifest: dict, start: int, end: int,
+                   window: int, raw: Path, save_manifest) -> None:
+    """Walk every selected hive's windows (resuming per hive under --catchup)."""
+    for a, h in hives:
+        hive_start = get_hive_resume_start(manifest, h["hiveId"], start) if args.catchup else start
+        if hive_start >= end:
+            continue
+        h_wins = list(iter_windows(hive_start, end, window))
+        hive_wins = list(reversed(h_wins)) if args.reverse else h_wins
+        process_hive(bm, a, h, hive_wins, args, raw, manifest["completed"], save_manifest)
+
+
+def _print_summary(bm, completed: dict, stopped_early: bool, raw: Path, manifest_path: Path) -> None:
+    total_rows = sum(v.get("reading_rows", 0) for v in completed.values())
+    total_notes = sum(v.get("notes", 0) for v in completed.values())
+    print(f"\n{'paused' if stopped_early else 'done'}: "
+          f"{len(completed)} windows, {total_rows} reading rows, {total_notes} notes")
+    print(f"API calls this run: {bm.call_count}")
+    print(f"raw -> {raw}\nmanifest -> {manifest_path}")
+
+
+def main() -> int:
+    args = _build_parser().parse_args()
 
     # Normalize the CLI-supplied output root once; every write below is proven
     # (via resolve_within) to stay inside it, so a hostile --out or hive id
@@ -252,15 +296,7 @@ def main() -> int:
     completed: dict = manifest["completed"]
 
     start = parse_date(args.start)
-
-    # Snap the open end to midnight UTC so re-runs within a day reuse the same
-    # window key (stable resume; the live now-epoch would otherwise mint a new
-    # key each run and re-fetch the final window). Today's partial data is
-    # picked up on the next day's run.
-    if args.end:
-        end = parse_date(args.end)
-    else:
-        end = now_epoch() // 86400 * 86400
+    end = _resolve_end(args)
 
     if not args.catchup and start >= end:
         end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
@@ -290,31 +326,17 @@ def main() -> int:
             # handler so a 429 here exits cleanly (resumable) rather than crashing.
             apiaries = select_apiaries(bm.apiaries(), args.apiary)
             hives = [(a, h) for a in apiaries for h in a.get("hives", [])]
-            if args.catchup:
-                all_caught_up = True
-                for a, h in hives:
-                    h_start = get_hive_resume_start(manifest, h["hiveId"], start)
-                    if h_start < end:
-                        all_caught_up = False
-                        break
-                if hives and all_caught_up:
-                    end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
-                    print(f"already up to date through {end_dt:%Y-%m-%d} across all {len(hives)} hives. Nothing to extract.")
-                    return 0
+            if args.catchup and _all_caught_up(manifest, hives, start, end):
+                end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
+                print(f"already up to date through {end_dt:%Y-%m-%d} across all {len(hives)} hives. Nothing to extract.")
+                return 0
 
             print(f"scope: {len(apiaries)} apiaries, {len(hives)} hives")
             print(f"range: {args.start} .. {args.end or 'now'}  "
                   f"({len(wins)} windows/hive)")
             print(f"budget: stop at {args.max_calls} calls (already used {bm.call_count})\n")
 
-            for a, h in hives:
-                hid = h["hiveId"]
-                hive_start = get_hive_resume_start(manifest, hid, start) if args.catchup else start
-                if hive_start >= end:
-                    continue
-                h_wins = list(iter_windows(hive_start, end, window))
-                hive_wins = list(reversed(h_wins)) if args.reverse else h_wins
-                process_hive(bm, a, h, hive_wins, args, raw, completed, save_manifest)
+            _extract_hives(bm, hives, args, manifest, start, end, window, raw, save_manifest)
         except _BudgetExhausted:
             stopped_early = True
         except RateLimited as ex:
@@ -330,12 +352,7 @@ def main() -> int:
             return 2
 
         save_manifest()
-        total_rows = sum(v.get("reading_rows", 0) for v in completed.values())
-        total_notes = sum(v.get("notes", 0) for v in completed.values())
-        print(f"\n{'paused' if stopped_early else 'done'}: "
-              f"{len(completed)} windows, {total_rows} reading rows, {total_notes} notes")
-        print(f"API calls this run: {bm.call_count}")
-        print(f"raw -> {raw}\nmanifest -> {manifest_path}")
+        _print_summary(bm, completed, stopped_early, raw, manifest_path)
     return 0
 
 

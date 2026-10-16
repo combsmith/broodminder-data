@@ -56,6 +56,23 @@ def test_find_sample_ids_hive_without_devices():
     assert discover.find_sample_ids(apiaries) == ("H1", None)
 
 
+def test_find_sample_ids_scalar_payload_is_empty():
+    assert discover.find_sample_ids("oops") == (None, None)
+    assert discover.find_sample_ids(5) == (None, None)
+
+
+def test_stream_existing_readings_skips_blank_lines(tmp_path):
+    target = tmp_path / "readings.ndjson.gz"
+    row = {"hiveId": "H1", "positionID": "p", "deviceId": "d", "timestamp": 1}
+    with gzip.open(target, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(row) + "\n\n   \n")
+    sink = MagicMock()
+    seen = defaultdict(set)
+    flatten._stream_existing_readings(sink, target, seen)
+    assert sink.emit.call_count == 1
+    assert ("p", "d", 1) in seen["H1"]
+
+
 def test_find_sample_ids_empty():
     assert discover.find_sample_ids([]) == (None, None)
     assert discover.find_sample_ids({"apiaries": []}) == (None, None)
@@ -548,3 +565,78 @@ def test_process_hive_stop_after_empty_fetch(tmp_path):
     extract_all.process_hive(bm, a, h, wins, args, tmp_path, completed, lambda: None)
     # After the first fetch with 0 rows, empties=1 >= limit=1 → break; second window never fetched
     assert bm.hive_readings.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# S3776 helper extractions (cognitive-complexity refactor, #192)
+# ---------------------------------------------------------------------------
+def test_iter_hives_normalizes_payload_shapes():
+    hive = {"hiveId": "H1"}
+    assert list(discover._iter_hives([{"hives": [hive]}])) == [hive]
+    assert list(discover._iter_hives({"apiaries": [{"hives": [hive]}]})) == [hive]
+    assert list(discover._iter_hives([{"name": "no hives"}])) == []
+    assert list(discover._iter_hives(None)) == []
+
+
+def test_first_device_id_skips_devices_without_id():
+    hv = {"devices": [{"name": "unlabelled"}, {"id": "D2"}, {"deviceId": "D3"}]}
+    assert discover._first_device_id(hv) == "D2"
+    assert discover._first_device_id({"hiveId": "H1"}) is None
+
+
+def test_find_sample_ids_device_from_later_hive():
+    # hive_id comes from the first hive; device_id from the first hive that has one
+    apiaries = [{"hives": [{"hiveId": "H1"}, {"hiveId": "H2", "devices": [{"deviceId": "D2"}]}]}]
+    assert discover.find_sample_ids(apiaries) == ("H1", "D2")
+
+
+def test_note_key_prefers_id_then_created_description():
+    assert flatten._note_key("H1", {"id": "N1", "created": 1}) == ("H1", "N1")
+    assert flatten._note_key("H1", {"created": 1, "description": "d"}) == ("H1", (1, "d", None))
+    assert flatten._note_key("H1", {"created": 1, "description": "d", "text": "content"}) == ("H1", (1, "d", "content"))
+
+
+def test_write_notes_merge_keeps_existing_and_dedupes(tmp_path):
+    existing = tmp_path / "notes.ndjson"
+    existing.write_text(json.dumps({"hiveId": "H1", "id": "N1"}) + "\n\n")
+    raw = tmp_path / "raw"
+    (raw / "H1").mkdir(parents=True)
+    (raw / "H1" / "0-1.notes.json").write_text(json.dumps([{"id": "N1"}, {"id": "N2"}]))
+    out = tmp_path / "out.ndjson"
+    n = flatten.write_notes(out, {"H1": {"hiveName": "Hive"}}, raw=raw, merge=True, existing_target=existing)
+    assert n == 2
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert [r["id"] for r in rows] == ["N1", "N2"]
+    assert rows[1]["hiveName"] == "Hive"
+
+
+def test_has_content(tmp_path):
+    p = tmp_path / "f"
+    assert not flatten._has_content(p)
+    p.write_text("")
+    assert not flatten._has_content(p)
+    p.write_text("x")
+    assert flatten._has_content(p)
+
+
+def test_existing_metric_keys(tmp_path):
+    p = tmp_path / "readings.ndjson.gz"
+    with gzip.open(p, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps({"hiveId": "H1", "m_weight": 1, "m_": 2}) + "\n\n")
+        fh.write(json.dumps({"m_lux": 3}) + "\n")
+    assert flatten._existing_metric_keys(p) == {"weight", "lux"}
+
+
+def test_resolve_end_explicit_and_snapped(monkeypatch):
+    args = MagicMock(end="2024-01-02")
+    assert extract_all._resolve_end(args) == extract_all.parse_date("2024-01-02")
+    monkeypatch.setattr(extract_all, "now_epoch", lambda: 86400 * 10 + 1234)
+    assert extract_all._resolve_end(MagicMock(end=None)) == 86400 * 10
+
+
+def test_all_caught_up():
+    manifest = {"completed": {"H1|0|100": {}, "H2|0|50": {}}}
+    hives = [({}, {"hiveId": "H1"}), ({}, {"hiveId": "H2"})]
+    assert extract_all._all_caught_up(manifest, hives, 0, 50)
+    assert not extract_all._all_caught_up(manifest, hives, 0, 100)
+    assert not extract_all._all_caught_up(manifest, [], 0, 50)
