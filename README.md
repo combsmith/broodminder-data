@@ -470,7 +470,7 @@ For commercial inquiries, email [support@combsmith.com](mailto:support@combsmith
 
 ## Contributing
 
-See the [Contributing Guide](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [Code of Conduct](CODE_OF_CONDUCT.md).
+See the [Contributing Guide](https://github.com/combsmith/.github/blob/main/CONTRIBUTING.md), [Security Policy](https://github.com/combsmith/.github/blob/main/SECURITY.md), and the [Code of Conduct](CODE_OF_CONDUCT.md).
 Check out open [Discussions](https://github.com/combsmith/broodminder-data/discussions) to weigh in on upcoming features and architectural decisions.
 
 ---
