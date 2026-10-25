@@ -23,5 +23,8 @@ def test_no_local_security_md_shadows_org_policy() -> None:
 def test_readme_links_to_org_security_policy() -> None:
     """Ensure README.md links to the canonical org-wide SECURITY.md."""
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "https://github.com/combsmith/.github/blob/main/SECURITY.md" in readme
+    assert (
+        "[Security Policy](https://github.com/combsmith/.github/blob/main/SECURITY.md)"
+        in readme
+    )
     assert "(SECURITY.md)" not in readme
