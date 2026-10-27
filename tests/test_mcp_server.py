@@ -160,6 +160,9 @@ def test_device_health_refresh_and_apiary_filter():
     # Battery-consistent matching: case-insensitive substring on the name.
     assert _hives_for_apiary(stub, "one") == ["h1"]
     assert _hives_for_apiary(stub, "TWO") == ["h2"]
+    # Whitespace around the filter is normalized (mirrors bm.battery).
+    assert _hives_for_apiary(stub, " one ") == ["h1"]
+    assert _hives_for_apiary(stub, "  A2 ") == ["h2"]
     assert sorted(_hives_for_apiary(stub, None)) == ["h1", "h2"]
 
     # device_health refresh branch: non-sandbox store, bounded window.

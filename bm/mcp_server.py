@@ -139,13 +139,13 @@ def _hives_for_apiary(store: Any, apiary: str | None) -> list[str]:
     Matching mirrors ``bm.battery``'s apiary filter: exact ID match, or
     case-insensitive substring match on the apiary name.
     """
+    apiary_filter = apiary.strip().lower() if apiary else None
     all_hives: list[str] = []
     for entry in _topology(store):
         in_apiary = (
-            not apiary
-            or str(entry.get("apiaryId") or "") == str(apiary)
-            or (bool(apiary) and str(apiary).lower()
-                in str(entry.get("apiaryName") or "").lower())
+            not apiary_filter
+            or str(entry.get("apiaryId") or "").strip().lower() == apiary_filter
+            or apiary_filter in str(entry.get("apiaryName") or "").lower()
         )
         for hive in entry.get("hives", []) or []:
             if hive.get("hiveId") is not None and (in_apiary or not apiary):
