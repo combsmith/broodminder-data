@@ -50,7 +50,8 @@ jobs:
         run: |
           for attempt in 1 2 3; do
             if pip install -r requirements.txt --require-hashes --only-binary :all:; then
-              exit 0
+              # MCP extra so tests/test_mcp_server.py runs (not skipped) in CI.
+              pip install --require-hashes --only-binary :all: -r scripts/mcp-requirements.txt && exit 0
             fi
             if [ "${attempt}" -eq 3 ]; then
               echo "::error::pip install failed after 3 attempts" >&2

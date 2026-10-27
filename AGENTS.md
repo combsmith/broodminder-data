@@ -25,7 +25,11 @@ broodminder-data/
 ├── bm/
 │   ├── __init__.py           # Public exports
 │   ├── battery.py            # Battery health & offline sensor evaluation engine
-│   └── client.py             # Reusable BroodMinderClient (auth, retry, windowing)
+│   ├── client.py             # Reusable BroodMinderClient (auth, retry, windowing)
+│   ├── analytics.py          # Pure latest-status & telemetry trend aggregation
+│   ├── store.py              # Offline-first local store with live tail-sync
+│   ├── sandbox.py            # Deterministic synthetic dataset for MCP demos/tests
+│   └── mcp_server.py         # FastMCP server (broodminder-mcp entry point)
 ├── scripts/
 │   ├── battery_health.py     # Battery health & offline sensor inspection CLI
 │   ├── discover.py           # Account topology and schema inspection

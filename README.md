@@ -43,7 +43,7 @@
 2. **🔄 Periodic Delta Sync**: Lightweight, incremental polling engine designed for regular cron or background services, fetching only new readings since the last checkpoint while buffering for late-arriving BLE uploads.
 3. **📜 Published OpenAPI 3.1 Specification**: Formal, validated OpenAPI 3.1 contract covering all observed endpoints, query parameters, error responses (including HTTP 412 auth responses), and canonical telemetry schemas.
 4. **🤖 Model Context Protocol (MCP) Server**: Native MCP integration (`broodminder-mcp`) connecting AI agents (**Claude Desktop, Antigravity CLI, Cursor, Windsurf, Claude Code**) directly to hive metrics, temperature trends, weight deltas, and notes.
-5. **🐍 Unified Python Client Library & CLI**: Strongly-typed domain models, offline sandbox mode, and a standalone `broodminder` CLI.
+5. **🐍 Python Client Library & CLI Scripts**: A reusable typed client (`BroodMinderClient`), standalone scripts for discovery/extraction/flattening, and the `broodminder-battery` and `broodminder-mcp` entry points. (A unified `broodminder` CLI and typed domain models remain planned — see Discussion #151.)
 
 ---
 
@@ -274,14 +274,15 @@ npx @redocly/cli preview-docs openapi.yaml
 
 Connect your hive data directly to AI agents (**Claude Desktop, Antigravity CLI, Cursor, Windsurf, Claude Code**):
 
+The server (`bm/mcp_server.py`, FastMCP on stdio) is **offline-first**: tools read your local extract store (`data/extract/`) first, and with the default `source="auto"` a live fetch fills only the missing tail per hive, writes it through to the local store, and is never fetched again. With `source="offline"` no network calls are made. No API key is needed for offline queries.
+
 ### Agent Configuration (`claude_desktop_config.json` or `mcp.json`)
 
 ```json
 {
   "mcpServers": {
     "broodminder": {
-      "command": "python3",
-      "args": ["-m", "bm.mcp_server"],
+      "command": "broodminder-mcp",
       "env": {
         "BROODMINDER_API_KEY": "your-api-key-here"
       }
@@ -290,12 +291,16 @@ Connect your hive data directly to AI agents (**Claude Desktop, Antigravity CLI,
 }
 ```
 
+Equivalently: `python -m bm.mcp_server`, or `uvx --from "broodminder-data[mcp]" broodminder-mcp`. Try it without a key or live data with the deterministic sandbox dataset: `broodminder-mcp --sandbox`.
+
 ### Core MCP Tools
 - `get_apiary_summary`: High-level inventory of apiaries, hives, and device counts.
-- `get_hive_status`: Latest sensor telemetry (brood temperature, ambient temperature, humidity, weight).
+- `get_hive_status`: Latest sensor telemetry per device (temperature, humidity, weight, and other reported metrics under their real names).
 - `get_telemetry_trends`: Time-series rollups (min, max, mean, delta) over specified lookback windows.
 - `get_hive_notes`: Recent inspection notes, treatments, and queen observations.
 - `get_device_health`: Battery levels and sync freshness across sensors.
+
+Every response includes provenance (`source`, `stale`) so agents can tell offline, freshly-synced, and stale data apart. The server also exposes resources (`broodminder://apiaries/list`, `broodminder://hives/{hive_id}/status`, `broodminder://devices/health`) and two prompts (`inspection_prep`, `device_health_audit`).
 
 ---
 
@@ -305,23 +310,21 @@ Connect your hive data directly to AI agents (**Claude Desktop, Antigravity CLI,
 from bm.client import BroodMinderClient
 
 # Automatically reads BROODMINDER_API_KEY from environment or .env
-client = BroodMinderClient()
+with BroodMinderClient() as client:
+    # Apiaries with their hives nested inside
+    apiaries = client.apiaries()
+    for apiary in apiaries:
+        print(f"Apiary: {apiary['name']} (ID: {apiary['apiaryId']})")
+        for hive in apiary.get("hives", []):
+            print(f"  - Hive: {hive['name']} ({hive['hiveId']})")
 
-# List apiaries and hives
-apiaries = client.get_apiaries()
-for apiary in apiaries:
-    print(f"Apiary: {apiary['name']} (ID: {apiary['apiary_id']})")
-    hives = client.get_hives(apiary_id=apiary['apiary_id'])
-    for hive in hives:
-        print(f"  - Hive: {hive['name']}")
-
-# Fetch time-series readings for a device (epoch seconds)
-readings = client.get_device_readings(
-    device_id="42:11:22:33:44:55",
-    start=1704067200,  # 2024-01-01T00:00:00Z
-    end=1706745600,    # 2024-02-01T00:00:00Z
-)
-print(f"Fetched {len(readings)} readings")
+    # Fetch time-series readings for a device (epoch seconds)
+    readings = client.device_readings(
+        "42:11:22:33:44:55",
+        1704067200,  # 2024-01-01T00:00:00Z
+        1706745600,  # 2024-02-01T00:00:00Z
+    )
+    print(f"Fetched {len(readings)} readings")
 ```
 
 ---
@@ -421,7 +424,11 @@ broodminder-data/
 ├── bm/
 │   ├── __init__.py
 │   ├── battery.py           # Battery health & offline sensor monitor
-│   └── client.py            # Reusable BroodMinderClient (auth, retry, windowing)
+│   ├── client.py            # Reusable BroodMinderClient (auth, retry, windowing)
+│   ├── analytics.py         # Pure latest-status & telemetry trend aggregation
+│   ├── store.py             # Offline-first local store with live tail-sync
+│   ├── sandbox.py           # Deterministic synthetic dataset for MCP demos/tests
+│   └── mcp_server.py        # FastMCP server (broodminder-mcp entry point)
 ├── scripts/
 │   ├── battery_health.py    # Battery health & offline sensor CLI
 │   ├── discover.py          # Auth check + account topology/schema sample
