@@ -94,10 +94,33 @@ def test_protocol_tools_resources_prompts():
     asyncio.run(run())
 
 
+def test_stdio_subprocess_speaks_jsonrpc():
+    """Real stdio contract: first stdout line must parse as JSON-RPC."""
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "bm.mcp_server", "--sandbox"],
+        input=json.dumps({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                       "clientInfo": {"name": "test", "version": "0"}},
+        }) + "\n",
+        capture_output=True, text=True, timeout=30,
+    )
+    first = proc.stdout.splitlines()[0]
+    msg = json.loads(first)
+    assert msg["jsonrpc"] == "2.0"
+    assert msg["result"]["serverInfo"]["name"] == "broodminder"
+
+
 def test_readme_and_packaging_references_exist():
     """Guard for #217: modules/methods/entry points named in README must exist."""
     import re
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10
+        import tomli as tomllib
     from pathlib import Path
 
     from bm.client import BroodMinderClient

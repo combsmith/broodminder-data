@@ -123,8 +123,11 @@ def hive_notes(store: Any, hive_id: str, days: int = 30, limit: int = 20,
     now = _now(now_ts)
     start, end = analytics.derive_notes_window(days, now)
     provenance = _prepare(store, [str(hive_id)], start, end, source, now_ts)
+    # Notes lacking both date fields are undated, not ancient: include them
+    # (sorted last) rather than silently dropping them.
     notes = [n for n in store.iter_notes(hive_id)
-             if (n.get("timestamp") or n.get("created") or 0) >= start]
+             if (n.get("timestamp") or n.get("created")) is None
+             or (n.get("timestamp") or n.get("created")) >= start]
     notes.sort(key=lambda n: (n.get("timestamp") or n.get("created") or 0), reverse=True)
     return {"hive_id": str(hive_id), "notes": notes[: max(1, limit)],
             "provenance": provenance}

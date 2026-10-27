@@ -12,12 +12,37 @@ from __future__ import annotations
 import gzip
 import json
 import os
+import re
 import sys
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+import httpx
+
 from .client import BroodMinderClient, BroodMinderError, iter_windows
+
+# A truncated/corrupt gzip window must not crash a read (a sync may be
+# writing it concurrently); treat it as absent.
+_GZIP_READ_ERRORS = (OSError, EOFError, zlib.error, json.JSONDecodeError)
+
+_HIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# Tail-fetch tolerances: do not spend API calls on a tail smaller than
+# MIN_TAIL_SECONDS, and do not fetch the most recent SETTLE_SECONDS so
+# late-arriving BLE uploads inside a window are not locked out by
+# recording that window complete too early.
+MIN_TAIL_SECONDS = 3600
+SETTLE_SECONDS = 900
+
+
+def _safe_hive_id(hive_id: str | int) -> str:
+    """Validate a hive ID before it becomes a path or URL segment."""
+    s = str(hive_id)
+    if not _HIVE_ID_RE.fullmatch(s):
+        raise ValueError(f"invalid hive_id: {s!r}")
+    return s
 
 
 def _log(msg: str) -> None:
@@ -50,11 +75,33 @@ class LocalStore:
                 return {"completed": {}, "meta": {}}
         return {"completed": {}, "meta": {}}
 
+    def _manifest_unreadable(self) -> bool:
+        """True when a manifest file exists but cannot be parsed."""
+        if not self.manifest_path.exists():
+            return False
+        try:
+            json.loads(self.manifest_path.read_text(encoding="utf-8"))
+            return False
+        except (json.JSONDecodeError, OSError):
+            return True
+
     def _save_manifest(self, manifest: dict[str, Any]) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self.manifest_path.with_suffix(".json.tmp")
+        # Unique temp name per process: a fixed name can be clobbered by a
+        # concurrent writer between write and replace.
+        tmp = self.manifest_path.with_name(f".manifest.json.tmp.{os.getpid()}")
         tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         tmp.replace(self.manifest_path)
+
+    def _save_completed(self, manifest: dict[str, Any]) -> None:
+        """Persist ``manifest``'s completed windows, merging any records
+        written by another process since ``manifest`` was loaded."""
+        fresh = self._load_manifest()
+        fresh.setdefault("completed", {}).update(manifest.get("completed", {}))
+        fresh.setdefault("meta", {}).update(manifest.get("meta", {}))
+        self._save_manifest(fresh)
+        manifest.clear()
+        manifest.update(fresh)
 
     def coverage(self) -> dict[str, dict[str, Any]]:
         """Per-hive covered window derived from the manifest."""
@@ -145,7 +192,7 @@ class LocalStore:
                             payload = json.load(fh)
                     else:
                         payload = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
+                except _GZIP_READ_ERRORS:
                     continue
                 for pos in payload or []:
                     pid = pos.get("positionID")
@@ -185,15 +232,18 @@ class LocalStore:
         if path is None:
             return
         opener = gzip.open if path.suffix == ".gz" else open
-        with opener(path, "rt", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    yield json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        try:
+            with opener(path, "rt", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+        except _GZIP_READ_ERRORS:
+            return
 
     def iter_readings(
         self, hive_id: str | int | None = None, start: int | None = None, end: int | None = None
@@ -204,6 +254,8 @@ class LocalStore:
         (hive, position, device, timestamp): a partially retained raw tree
         must never hide archived history, and vice versa.
         """
+        if hive_id is not None:
+            hive_id = _safe_hive_id(hive_id)
         seen: dict[str, set[tuple]] = {}
         sources: list[Iterable[dict[str, Any]]] = [self._iter_flat_readings()]
         if self.raw.exists() and any(self.raw.iterdir()):
@@ -229,6 +281,8 @@ class LocalStore:
 
     def iter_notes(self, hive_id: str | int | None = None) -> Iterator[dict[str, Any]]:
         """Stream notes merged from raw windows AND notes.ndjson (deduplicated)."""
+        if hive_id is not None:
+            hive_id = _safe_hive_id(hive_id)
         seen: set[tuple] = set()
         if self.raw.exists():
             hive_dirs = (
@@ -245,7 +299,7 @@ class LocalStore:
                                 payload = json.load(fh)
                         else:
                             payload = json.loads(path.read_text(encoding="utf-8"))
-                    except (OSError, json.JSONDecodeError):
+                    except _GZIP_READ_ERRORS:
                         continue
                     items = payload if isinstance(payload, list) else (payload or {}).get("notes", [])
                     for note in items or []:
@@ -348,13 +402,23 @@ class LocalStore:
         """
         if source not in ("auto", "offline"):
             raise ValueError(f"unknown source {source!r}; use 'auto' or 'offline'")
-        hive_list = [str(h) for h in hive_ids]
+        hive_list = [_safe_hive_id(h) for h in hive_ids]
         with self._locked():
             return self._ensure_coverage_locked(hive_list, start, end, source, client)
 
     def _ensure_coverage_locked(
         self, hive_list: list[str], start: int, end: int, source: str, client: Any
     ) -> dict[str, Any]:
+        # Settle lag: never fetch the most recent SETTLE_SECONDS, so
+        # late-arriving BLE uploads are not locked out of a window that
+        # was recorded complete before they arrived.
+        fetch_end = end - SETTLE_SECONDS if (end - start) > SETTLE_SECONDS else end
+        if self._manifest_unreadable():
+            _log("store: manifest exists but is unreadable; serving stale local data")
+            return {
+                "stale": True, "fetched_windows": 0,
+                "covered_end": {h: start for h in hive_list}, "source": source,
+            }
         manifest = self._load_manifest()
         completed = manifest.setdefault("completed", {})
         covered_end = {h: self._covered_end(manifest, h, start) for h in hive_list}
@@ -373,9 +437,18 @@ class LocalStore:
             return out
 
         missing = {
-            h: self._missing_windows(self._completed_intervals(manifest, h), start, end)
+            h: self._missing_windows(self._completed_intervals(manifest, h), start, fetch_end)
             for h in hive_list
         }
+        # Minimum tail: a lone tail gap smaller than MIN_TAIL_SECONDS (with
+        # prior coverage) is not worth API calls yet; it is within tolerance,
+        # so it does not count as stale either.
+        for h in hive_list:
+            wins = missing[h]
+            intervals = self._completed_intervals(manifest, h)
+            if wins and intervals:
+                if fetch_end - wins[0][0] < MIN_TAIL_SECONDS and wins[-1][1] >= fetch_end:
+                    missing[h] = []
         if source == "offline":
             stale = any(missing[h] or _notes_missing(h) for h in hive_list)
             return {"stale": stale, "fetched_windows": 0, "covered_end": covered_end, "source": source}
@@ -419,14 +492,14 @@ class LocalStore:
                     rec = completed[f"{hive}|{s}|{e}"]
                     if not _fetch_notes(hive, s, e, rec):
                         stale = True
-                    self._save_manifest(manifest)
+                    self._save_completed(manifest)
                 for s, e in missing[hive]:
                     key = f"{hive}|{s}|{e}"
                     if key in completed:
                         continue
                     try:
                         readings = client.hive_readings(hive, s, e)
-                    except BroodMinderError as exc:
+                    except (BroodMinderError, httpx.HTTPError, ValueError) as exc:
                         _log(f"store: live fetch failed for hive {hive} [{s},{e}): {exc}")
                         stale = True
                         break
@@ -441,10 +514,10 @@ class LocalStore:
                     if not _fetch_notes(hive, s, e, rec):
                         stale = True
                     completed[key] = rec
-                    self._save_manifest(manifest)
+                    self._save_completed(manifest)
                     fetched += 1
                 covered_end[hive] = self._covered_end(manifest, hive, start)
-                if self._missing_windows(self._completed_intervals(manifest, hive), start, end):
+                if self._missing_windows(self._completed_intervals(manifest, hive), start, fetch_end):
                     stale = True
         finally:
             if owns_client:

@@ -117,6 +117,9 @@ def test_trends_bucket_edges_and_cap():
     capped = trends(many, "h1", "weight", BASE, BASE + 3600 * 600, bucket="1h")
     assert len(capped["buckets"]) == 500
     assert capped["truncated"] is True
+    # Truncation keeps the NEWEST buckets (trend ends at "now").
+    assert capped["buckets"][-1]["start"] == (BASE + 3600 * 599) // 3600 * 3600
+    assert capped["buckets"][0]["start"] == (BASE + 3600 * 100) // 3600 * 3600
 
 
 # -- notes window ----------------------------------------------------------

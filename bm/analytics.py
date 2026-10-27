@@ -109,7 +109,8 @@ def trends(
 
     ordered = sorted(agg)
     truncated = len(ordered) > MAX_BUCKETS
-    ordered = ordered[:MAX_BUCKETS]
+    # Keep the NEWEST buckets: a lookback trend must end at "now".
+    ordered = ordered[-MAX_BUCKETS:]
     buckets = [
         {
             "start": b,

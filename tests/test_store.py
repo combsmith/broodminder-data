@@ -182,6 +182,44 @@ def test_transport_error_wrapped_as_broodminder_error():
         client.close()
 
 
+def test_invalid_hive_id_rejected(tmp_path):
+    import pytest
+
+    store = seed_store(tmp_path)
+    with pytest.raises(ValueError):
+        list(store.iter_readings("../escape"))
+    with pytest.raises(ValueError):
+        store.ensure_coverage(["../../etc"], BASE, BASE + DAY, source="offline")
+
+
+def test_corrupt_manifest_returns_stale_without_overwrite(tmp_path):
+    store = seed_store(tmp_path)
+    (tmp_path / "manifest.json").write_text("{not json")
+    fake = FakeClient()
+    report = store.ensure_coverage(["h1"], BASE, BASE + 2 * DAY, source="auto", client=fake)
+    assert report["stale"] is True
+    assert fake.calls == 0
+    assert (tmp_path / "manifest.json").read_text() == "{not json"  # not overwritten
+
+
+def test_corrupt_gzip_window_skipped(tmp_path):
+    store = seed_store(tmp_path)
+    bad = tmp_path / "raw" / "h1" / "1-2.readings.json.gz"
+    bad.write_bytes(b"not a gzip stream")
+    rows = list(store.iter_readings("h1", BASE, BASE + DAY))
+    assert len(rows) == 1  # good window still readable
+
+
+def test_small_tail_not_fetched(tmp_path):
+    store = seed_store(tmp_path)
+    fake = FakeClient()
+    # Missing tail is 100s (< MIN_TAIL_SECONDS) beyond settled coverage.
+    report = store.ensure_coverage(
+        ["h1"], BASE, BASE + DAY + 100 + 900, source="auto", client=fake)
+    assert report["fetched_windows"] == 0
+    assert fake.calls == 0
+
+
 def test_notes_from_raw_and_flattened_fallback(tmp_path):
     store = seed_store(tmp_path)
     fake = FakeClient()
