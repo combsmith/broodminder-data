@@ -331,19 +331,37 @@ class LocalStore:
 
         Uses the same lockfile convention as the cron scripts
         (``data/.sync.lock`` flock), scoped to the store directory.
+        Falls back to ``msvcrt.locking`` on Windows, and to a no-op lock
+        when neither platform module is available.
         """
         import contextlib
-        import fcntl
+
+        try:
+            import fcntl
+        except ImportError:  # non-POSIX (e.g. Windows)
+            fcntl = None
+        try:
+            import msvcrt
+        except ImportError:  # POSIX
+            msvcrt = None
 
         @contextlib.contextmanager
         def _cm():
             self.data_dir.mkdir(parents=True, exist_ok=True)
-            with open(self.data_dir / ".sync.lock", "w") as fh:
-                fcntl.flock(fh, fcntl.LOCK_EX)
+            with open(self.data_dir / ".sync.lock", "a+") as fh:
+                if fcntl is not None:
+                    fcntl.flock(fh, fcntl.LOCK_EX)
+                elif msvcrt is not None:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
                 try:
                     yield
                 finally:
-                    fcntl.flock(fh, fcntl.LOCK_UN)
+                    if fcntl is not None:
+                        fcntl.flock(fh, fcntl.LOCK_UN)
+                    elif msvcrt is not None:
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
 
         return _cm()
 
