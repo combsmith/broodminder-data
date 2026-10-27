@@ -112,10 +112,48 @@ def test_readme_and_packaging_references_exist():
     assert pyproject["project"]["scripts"]["broodminder-mcp"] == "bm.mcp_server:main"
 
 
-def test_main_entrypoint_and_stdout_guard(capsys):
-    from bm.mcp_server import main
+def test_device_health_refresh_and_apiary_filter():
+    from bm.mcp_server import _hives_for_apiary, device_health
+    from bm.store import LocalStore
+    import gzip
+    import json as _json
 
-    assert callable(main)
+    class FakeStore(LocalStore):
+        pass
+
+    # _hives_for_apiary filters by apiary id/name, all hives when unset.
+    class Stub:
+        def topology(self):
+            return [
+                {"apiaryId": "a1", "apiaryName": "One",
+                 "hives": [{"hiveId": "h1", "devices": []}]},
+                {"apiaryId": "a2", "apiaryName": "Two",
+                 "hives": [{"hiveId": "h2", "devices": []}]},
+            ]
+
+    stub = Stub()
+    assert _hives_for_apiary(stub, "a2") == ["h2"]
+    assert _hives_for_apiary(stub, "One") == ["h1"]
+    assert sorted(_hives_for_apiary(stub, None)) == ["h1", "h2"]
+
+
+def test_main_entrypoint_and_stdout_guard(capsys, monkeypatch):
+    import bm.mcp_server as ms
+
+    assert callable(ms.main)
     server = _server()
     assert server.name == "broodminder"
+
+    captured = {}
+
+    class FakeServer:
+        def run(self, transport="stdio"):
+            captured["transport"] = transport
+
+    monkeypatch.setattr(ms, "build_server", lambda store=None: (captured.__setitem__("store", store), FakeServer())[1])
+    assert ms.main(["--sandbox"]) == 0
+    assert captured["transport"] == "stdio"
+    from bm.sandbox import SandboxStore as _SB
+
+    assert isinstance(captured["store"], _SB)
     assert capsys.readouterr().out == ""

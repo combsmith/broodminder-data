@@ -74,6 +74,14 @@ def test_coverage_and_iter_readings_from_raw(tmp_path):
     assert rows[0]["hiveName"] == "Hive One"
 
 
+def test_topology_from_local_data(tmp_path):
+    store = seed_store(tmp_path)
+    topo = store.topology()
+    assert topo[0]["apiaryName"] == "A1"
+    assert topo[0]["hives"][0]["hiveId"] == "h1"
+    assert topo[0]["hives"][0]["devices"] == ["d1"]
+
+
 def test_offline_source_never_calls_client(tmp_path):
     store = seed_store(tmp_path)
     fake = FakeClient()
@@ -105,6 +113,73 @@ def test_rate_limited_returns_stale_not_raise(tmp_path):
     report = store.ensure_coverage(["h1"], BASE, BASE + 2 * DAY, source="auto", client=fake)
     assert report["stale"] is True
     assert report["fetched_windows"] == 0
+
+
+class NotesFailClient(FakeClient):
+    def __init__(self):
+        super().__init__()
+        self.notes_calls = 0
+
+    def hive_notes(self, hive_id, start, end, raw=True):
+        self.calls += 1
+        self.notes_calls += 1
+        raise RuntimeError("notes boom")
+
+
+def test_merge_flat_archive_with_raw(tmp_path):
+    store = seed_store(tmp_path)
+    (tmp_path / "readings.ndjson").write_text(
+        json.dumps({"hiveId": "h-other", "deviceId": "d9", "positionID": "p",
+                    "timestamp": BASE + 5, "m_weight": 42.0}) + "\n"
+        + json.dumps({"hiveId": "h1", "deviceId": "d1", "positionID": "p1",
+                      "timestamp": BASE + 10, "m_temperature": 95.0}) + "\n")
+    rows = list(store.iter_readings())
+    keys = {(r["hiveId"], r["deviceId"], r["timestamp"]) for r in rows}
+    assert ("h-other", "d9", BASE + 5) in keys  # archived hive not hidden by raw/
+    assert len(rows) == len(keys) == 2  # overlapping row deduplicated
+
+
+def test_prefix_gap_is_fetched(tmp_path):
+    store = seed_store(tmp_path)
+    fake = FakeClient()
+    report = store.ensure_coverage(["h1"], BASE - DAY, BASE + DAY, source="auto", client=fake)
+    assert report["fetched_windows"] == 1  # only the missing prefix window
+    rows = list(store.iter_readings("h1", BASE - DAY, BASE + DAY))
+    assert any(r["timestamp"] == BASE - DAY + 10 for r in rows)
+
+
+def test_notes_failure_tracked_and_retried_without_refetch(tmp_path):
+    store = LocalStore(tmp_path)
+    failing = NotesFailClient()
+    r1 = store.ensure_coverage(["h1"], BASE, BASE + DAY, source="auto", client=failing)
+    assert r1["fetched_windows"] == 1
+    assert r1["stale"] is True
+    ok = FakeClient()
+    readings_before = ok.calls
+    r2 = store.ensure_coverage(["h1"], BASE, BASE + DAY, source="auto", client=ok)
+    assert r2["fetched_windows"] == 0  # readings not refetched
+    assert r2["stale"] is False
+    assert list(store.iter_notes("h1"))  # notes now present
+
+
+def test_transport_error_wrapped_as_broodminder_error():
+    import httpx
+
+    from bm.client import BroodMinderClient, BroodMinderError
+
+    def _boom(request):
+        raise httpx.ConnectError("down", request=request)
+
+    client = BroodMinderClient(api_key="test-key", max_retries=0)
+    client._client = httpx.Client(base_url="https://example.invalid",
+                                  transport=httpx.MockTransport(_boom))
+    try:
+        import pytest
+
+        with pytest.raises(BroodMinderError):
+            client.hive_readings("h1", BASE, BASE + DAY)
+    finally:
+        client.close()
 
 
 def test_notes_from_raw_and_flattened_fallback(tmp_path):

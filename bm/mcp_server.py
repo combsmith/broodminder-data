@@ -130,18 +130,41 @@ def hive_notes(store: Any, hive_id: str, days: int = 30, limit: int = 20,
             "provenance": provenance}
 
 
+def _hives_for_apiary(store: Any, apiary: str | None) -> list[str]:
+    """Hive IDs in the named apiary (matched by ID or name), or all hives."""
+    all_hives: list[str] = []
+    for entry in _topology(store):
+        in_apiary = (
+            not apiary
+            or str(entry.get("apiaryId") or "") == str(apiary)
+            or str(entry.get("apiaryName") or "") == str(apiary)
+        )
+        for hive in entry.get("hives", []) or []:
+            if hive.get("hiveId") is not None and (in_apiary or not apiary):
+                all_hives.append(str(hive["hiveId"]))
+    return all_hives
+
+
 def device_health(store: Any, apiary: str | None = None, threshold: int = 80,
                   stale_days: int = 7, source: str = "auto",
                   now_ts: int | None = None) -> dict[str, Any]:
     now = _now(now_ts)
+    if _is_sandbox(store):
+        provenance = {"source": "sandbox", "stale": False, "fetched_windows": 0}
+    else:
+        # Refresh coverage for known hives first so classification is not
+        # silently based on stale local data.
+        hives = _hives_for_apiary(store, apiary)
+        cov = store.coverage() if hasattr(store, "coverage") else {}
+        start = min(
+            [cov.get(h, {}).get("covered_start", now - 30 * 86400) for h in hives]
+            or [now - 30 * 86400]
+        )
+        provenance = _prepare(store, hives, start, now, source, now_ts) if hives else {
+            "source": source, "stale": False, "fetched_windows": 0}
     devices = scan_device_health_from_stream(
         store.iter_readings(), now_ts=now, threshold=threshold,
         stale_days=stale_days, apiary=apiary,
-    )
-    provenance = (
-        {"source": "sandbox", "stale": False, "fetched_windows": 0}
-        if _is_sandbox(store)
-        else {"source": source, "stale": False, "fetched_windows": 0}
     )
     return {"devices": [d.to_dict() for d in devices], "provenance": provenance}
 
@@ -221,7 +244,7 @@ def build_server(store: Any = None, now_ts: int | None = None):
                              f"{'; '.join(d.get('reasons') or []) or d['status']}")
             lines.append("")
         lines.append("## Hive status")
-        for hid in sorted(_known_hives(store)):
+        for hid in sorted(_hives_for_apiary(store, apiary_id or None)):
             status = hive_status(store, hid, source="offline", now_ts=now_ts)
             for dev in status["devices"]:
                 metrics = dev.get("metrics") or {}

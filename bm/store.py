@@ -198,14 +198,26 @@ class LocalStore:
     def iter_readings(
         self, hive_id: str | int | None = None, start: int | None = None, end: int | None = None
     ) -> Iterator[dict[str, Any]]:
-        """Stream flattened rows, optionally filtered by hive and [start, end)."""
+        """Stream rows from BOTH raw windows and the flattened archive.
+
+        The two sources are merged and deduplicated on
+        (hive, position, device, timestamp): a partially retained raw tree
+        must never hide archived history, and vice versa.
+        """
+        seen: dict[str, set[tuple]] = {}
+        sources: list[Iterable[dict[str, Any]]] = [self._iter_flat_readings()]
         if self.raw.exists() and any(self.raw.iterdir()):
-            rows: Iterable[dict[str, Any]] = self._iter_raw_readings(
-                str(hive_id) if hive_id is not None else None
+            sources.append(
+                self._iter_raw_readings(str(hive_id) if hive_id is not None else None)
             )
-        else:
-            rows = self._iter_flat_readings()
+        rows = (row for src in sources for row in src)
         for row in rows:
+            hid = str(row.get("hiveId") or "")
+            dk = (row.get("positionID"), row.get("deviceId"), row.get("timestamp"))
+            hive_seen = seen.setdefault(hid, set())
+            if dk in hive_seen:
+                continue
+            hive_seen.add(dk)
             if hive_id is not None and str(row.get("hiveId") or "") != str(hive_id):
                 continue
             ts = row.get("timestamp")
@@ -216,9 +228,8 @@ class LocalStore:
             yield row
 
     def iter_notes(self, hive_id: str | int | None = None) -> Iterator[dict[str, Any]]:
-        """Stream notes from raw windows (deduplicated), else notes.ndjson."""
+        """Stream notes merged from raw windows AND notes.ndjson (deduplicated)."""
         seen: set[tuple] = set()
-        found_raw = False
         if self.raw.exists():
             hive_dirs = (
                 sorted(self.raw.iterdir()) if hive_id is None else [self.raw / str(hive_id)]
@@ -228,7 +239,6 @@ class LocalStore:
                     continue
                 files = sorted(hdir.glob("*.notes.json.gz")) + sorted(hdir.glob("*.notes.json"))
                 for path in files:
-                    found_raw = True
                     try:
                         if path.suffix == ".gz":
                             with gzip.open(path, "rt", encoding="utf-8") as fh:
@@ -244,8 +254,6 @@ class LocalStore:
                             continue
                         seen.add(key)
                         yield {"hiveId": hdir.name, **note}
-        if found_raw:
-            return
         notes_path = self.data_dir / "notes.ndjson"
         if notes_path.exists():
             for line in notes_path.read_text(encoding="utf-8").splitlines():
@@ -257,9 +265,69 @@ class LocalStore:
                     continue
                 if hive_id is not None and str(note.get("hiveId") or "") != str(hive_id):
                     continue
+                key = (str(note.get("hiveId") or ""), note.get("id") or (note.get("created"), note.get("description")))
+                if key in seen:
+                    continue
+                seen.add(key)
                 yield note
 
     # -- live tail sync -----------------------------------------------------
+    def _locked(self):
+        """Exclusive file lock serializing manifest read-modify-write.
+
+        Uses the same lockfile convention as the cron scripts
+        (``data/.sync.lock`` flock), scoped to the store directory.
+        """
+        import contextlib
+        import fcntl
+
+        @contextlib.contextmanager
+        def _cm():
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.data_dir / ".sync.lock", "w") as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+
+        return _cm()
+
+    def _completed_intervals(self, manifest: dict[str, Any], hive: str) -> list[tuple[int, int]]:
+        intervals: list[tuple[int, int]] = []
+        for key in manifest.get("completed", {}):
+            parts = key.rsplit("|", 2)
+            if len(parts) == 3 and parts[0] == hive:
+                try:
+                    intervals.append((int(parts[1]), int(parts[2])))
+                except ValueError:
+                    continue
+        return sorted(intervals)
+
+    @staticmethod
+    def _missing_windows(intervals: list[tuple[int, int]], start: int, end: int) -> list[tuple[int, int]]:
+        """Windows covering the parts of [start, end) not in ``intervals``."""
+        gaps: list[tuple[int, int]] = []
+        cur = start
+        for s, e in intervals:
+            if e <= cur:
+                continue
+            if s > cur:
+                gaps.append((cur, min(s, end)))
+            cur = max(cur, e)
+            if cur >= end:
+                break
+        if cur < end:
+            gaps.append((cur, end))
+        missing: list[tuple[int, int]] = []
+        for gs, ge in gaps:
+            missing.extend(iter_windows(gs, ge))
+        return missing
+
+    def _covered_end(self, manifest: dict[str, Any], hive: str, start: int) -> int:
+        intervals = self._completed_intervals(manifest, hive)
+        return max([start] + [e for _s, e in intervals])
+
     def ensure_coverage(
         self,
         hive_ids: Iterable[str | int],
@@ -271,22 +339,48 @@ class LocalStore:
         """Ensure the local store covers [start, end) for each hive.
 
         ``offline`` never touches the network. ``auto`` fetches only the
-        missing suffix per hive and persists each window before continuing.
+        missing intervals (prefix, interior gaps, or tail) per hive and
+        persists each window before continuing. Completed windows are
+        never re-fetched; failed note fetches are tracked separately
+        (``notes_missing``) and retried without refetching readings.
         Failures degrade to ``stale: True`` rather than raising.
+        The whole read-modify-write runs under an exclusive file lock.
         """
-        cov = self.coverage()
-        covered_end = {str(h): cov.get(str(h), {}).get("covered_end", start) for h in hive_ids}
-        # Recompute per requested hive (coverage may be absent).
-        hive_list = [str(h) for h in hive_ids]
-        covered_end = {
-            h: max(start, cov.get(h, {}).get("covered_end", start)) for h in hive_list
-        }
-        if all(covered_end[h] >= end for h in hive_list):
-            return {"stale": False, "fetched_windows": 0, "covered_end": covered_end, "source": source}
-        if source == "offline":
-            return {"stale": True, "fetched_windows": 0, "covered_end": covered_end, "source": source}
-        if source != "auto":
+        if source not in ("auto", "offline"):
             raise ValueError(f"unknown source {source!r}; use 'auto' or 'offline'")
+        hive_list = [str(h) for h in hive_ids]
+        with self._locked():
+            return self._ensure_coverage_locked(hive_list, start, end, source, client)
+
+    def _ensure_coverage_locked(
+        self, hive_list: list[str], start: int, end: int, source: str, client: Any
+    ) -> dict[str, Any]:
+        manifest = self._load_manifest()
+        completed = manifest.setdefault("completed", {})
+        covered_end = {h: self._covered_end(manifest, h, start) for h in hive_list}
+
+        def _notes_missing(hive: str) -> list[tuple[int, int]]:
+            out: list[tuple[int, int]] = []
+            for key, rec in completed.items():
+                parts = key.rsplit("|", 2)
+                if len(parts) == 3 and parts[0] == hive and rec.get("notes_missing"):
+                    try:
+                        s, e = int(parts[1]), int(parts[2])
+                    except ValueError:
+                        continue
+                    if s < end and e > start:
+                        out.append((s, e))
+            return out
+
+        missing = {
+            h: self._missing_windows(self._completed_intervals(manifest, h), start, end)
+            for h in hive_list
+        }
+        if source == "offline":
+            stale = any(missing[h] or _notes_missing(h) for h in hive_list)
+            return {"stale": stale, "fetched_windows": 0, "covered_end": covered_end, "source": source}
+        if not any(missing[h] or _notes_missing(h) for h in hive_list):
+            return {"stale": False, "fetched_windows": 0, "covered_end": covered_end, "source": source}
 
         owns_client = False
         if client is None:
@@ -297,14 +391,36 @@ class LocalStore:
                 _log(f"store: no live client ({exc}); serving stale local data")
                 return {"stale": True, "fetched_windows": 0, "covered_end": covered_end, "source": source}
 
-        manifest = self._load_manifest()
-        completed = manifest.setdefault("completed", {})
         fetched = 0
         stale = False
+
+        def _fetch_notes(hive: str, s: int, e: int, rec: dict[str, Any]) -> bool:
+            try:
+                notes = client.hive_notes(hive, s, e, raw=True)
+            except Exception as exc:  # tracked separately; readings stay complete
+                _log(f"store: notes fetch failed for hive {hive} window {s}-{e}: {exc}")
+                rec["notes_missing"] = True
+                return False
+            hive_dir = self.raw / hive
+            hive_dir.mkdir(parents=True, exist_ok=True)
+            with gzip.open(hive_dir / f"{s}-{e}.notes.json.gz", "wt", encoding="utf-8") as fh:
+                json.dump(notes, fh)
+            rec["notes"] = (
+                len(notes) if isinstance(notes, list)
+                else len((notes or {}).get("notes", []) or [])
+            )
+            rec.pop("notes_missing", None)
+            return True
+
         try:
             for hive in hive_list:
-                resume = covered_end[hive]
-                for s, e in iter_windows(resume, end):
+                # Retry previously failed notes without refetching readings.
+                for s, e in _notes_missing(hive):
+                    rec = completed[f"{hive}|{s}|{e}"]
+                    if not _fetch_notes(hive, s, e, rec):
+                        stale = True
+                    self._save_manifest(manifest)
+                for s, e in missing[hive]:
                     key = f"{hive}|{s}|{e}"
                     if key in completed:
                         continue
@@ -321,31 +437,21 @@ class LocalStore:
                     rows = 0
                     if isinstance(readings, list):
                         rows = sum(len(p.get("readings", []) or []) for p in readings)
-                    rec: dict[str, Any] = {"reading_rows": rows}
-                    try:
-                        notes = client.hive_notes(hive, s, e, raw=True)
-                        with gzip.open(hive_dir / f"{s}-{e}.notes.json.gz", "wt", encoding="utf-8") as fh:
-                            json.dump(notes, fh)
-                        rec["notes"] = (
-                            len(notes) if isinstance(notes, list)
-                            else len((notes or {}).get("notes", []) or [])
-                        )
-                    except Exception as exc:  # notes are best-effort; readings are primary
-                        _log(f"store: notes fetch failed for hive {hive}: {exc}")
+                    rec = {"reading_rows": rows}
+                    if not _fetch_notes(hive, s, e, rec):
+                        stale = True
                     completed[key] = rec
                     self._save_manifest(manifest)
                     fetched += 1
-                    covered_end[hive] = e
-                if stale:
-                    break
+                covered_end[hive] = self._covered_end(manifest, hive, start)
+                if self._missing_windows(self._completed_intervals(manifest, hive), start, end):
+                    stale = True
         finally:
             if owns_client:
                 try:
                     client.close()
                 except Exception:
                     pass
-        if any(covered_end[h] < end for h in hive_list):
-            stale = True
         return {
             "stale": stale,
             "fetched_windows": fetched,
