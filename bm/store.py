@@ -182,10 +182,34 @@ class LocalStore:
         return meta
 
     # -- reading rows -------------------------------------------------------
+    def _archive_meta(self) -> dict[str, dict[str, Any]]:
+        """Per-hive apiary/hive names recovered from flattened archive rows."""
+        meta: dict[str, dict[str, Any]] = {}
+        for row in self._iter_flat_readings():
+            hid = str(row.get("hiveId") or "")
+            if not hid:
+                continue
+            entry = meta.setdefault(
+                hid, {"apiaryId": None, "apiaryName": None, "hiveName": None}
+            )
+            for field in ("apiaryId", "apiaryName", "hiveName"):
+                if entry.get(field) is None and row.get(field) is not None:
+                    entry[field] = row.get(field)
+        return meta
+
     def _iter_raw_readings(self, hive_id: str | None) -> Iterator[dict[str, Any]]:
         if not self.raw.exists():
             return
         meta = self._hive_meta()
+        # Counts-only manifest records (from a live sync) must not blank
+        # out metadata the archive already knows for the hive.
+        for hid, archived in self._archive_meta().items():
+            entry = meta.setdefault(
+                hid, {"apiaryId": None, "apiaryName": None, "hiveName": None}
+            )
+            for field in ("apiaryId", "apiaryName", "hiveName"):
+                if entry.get(field) is None and archived.get(field) is not None:
+                    entry[field] = archived[field]
         hive_dirs = sorted(self.raw.iterdir()) if hive_id is None else [self.raw / str(hive_id)]
         for hdir in hive_dirs:
             if not hdir.is_dir():
@@ -448,8 +472,19 @@ class LocalStore:
                 "covered_end": {h: self._covered_end(manifest, h, start) for h in hive_list},
                 "source": source,
             }
-        with self._locked():
-            return self._ensure_coverage_locked(hive_list, start, end, source, client)
+        try:
+            with self._locked():
+                return self._ensure_coverage_locked(hive_list, start, end, source, client)
+        except OSError as exc:
+            # Unwritable/read-only store: degrade to stale local data
+            # rather than raising out of a tool call.
+            _log(f"store: cannot acquire sync lock ({exc}); serving stale local data")
+            manifest = self._load_manifest()
+            return {
+                "stale": True, "fetched_windows": 0,
+                "covered_end": {h: self._covered_end(manifest, h, start) for h in hive_list},
+                "source": source,
+            }
 
     def _ensure_coverage_locked(
         self, hive_list: list[str], start: int, end: int, source: str, client: Any
@@ -530,8 +565,14 @@ class LocalStore:
             rec.pop("notes_missing", None)
             return True
 
+        network_down = False
         try:
             for hive in hive_list:
+                if network_down:
+                    # A transport failure (status 0) already burned the
+                    # client's retries; do not repeat them per hive.
+                    stale = True
+                    break
                 # Retry previously failed notes without refetching readings.
                 for s, e in _notes_missing(hive):
                     rec = completed[f"{hive}|{s}|{e}"]
@@ -547,6 +588,8 @@ class LocalStore:
                     except (BroodMinderError, httpx.HTTPError, ValueError) as exc:
                         _log(f"store: live fetch failed for hive {hive} [{s},{e}): {exc}")
                         stale = True
+                        if isinstance(exc, BroodMinderError) and exc.status == 0:
+                            network_down = True
                         break
                     hive_dir = self.raw / hive
                     hive_dir.mkdir(parents=True, exist_ok=True)

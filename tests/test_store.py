@@ -254,6 +254,49 @@ def test_offline_needs_no_writable_store(tmp_path):
     assert not missing.exists()  # no lock file / directory created
 
 
+def test_raw_rows_inherit_archive_metadata(tmp_path):
+    store = LocalStore(tmp_path)
+    (tmp_path / "manifest.json").write_text(json.dumps(
+        {"completed": {f"h9|{BASE}|{BASE + DAY}": {"reading_rows": 1}}, "meta": {}}))
+    (tmp_path / "readings.ndjson").write_text(json.dumps(
+        {"hiveId": "h9", "apiaryName": "Named Apiary", "deviceId": "d9",
+         "positionID": "p", "timestamp": BASE, "m_weight": 1.0}) + "\n")
+    hdir = tmp_path / "raw" / "h9"
+    hdir.mkdir(parents=True)
+    payload = [{"positionID": "p", "readings": [{
+        "deviceId": "d9", "timestamp": BASE + 50, "batteryLevel": 90,
+        "chargeRemaining": None, "readings": {"weight": 2.0}}]}]
+    with gzip.open(hdir / f"{BASE}-{BASE + DAY}.readings.json.gz", "wt") as fh:
+        json.dump(payload, fh)
+    raw_row = [r for r in store.iter_readings("h9") if r["timestamp"] == BASE + 50][0]
+    assert raw_row["apiaryName"] == "Named Apiary"
+
+
+def test_auto_on_unwritable_store_returns_stale(tmp_path):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x")  # data_dir path is a file: mkdir/lock raises OSError
+    store = LocalStore(blocker)
+    report = store.ensure_coverage(["h1"], BASE, BASE + DAY, source="auto", client=FakeClient())
+    assert report["stale"] is True
+    assert report["fetched_windows"] == 0
+
+
+def test_transport_failure_aborts_remaining_hives(tmp_path):
+    from bm.client import BroodMinderError
+
+    class DownClient(FakeClient):
+        def hive_readings(self, hive_id, start, end):
+            self.calls += 1
+            raise BroodMinderError(0, "GET", "http://x", "transport error: down")
+
+    store = LocalStore(tmp_path)
+    down = DownClient()
+    report = store.ensure_coverage(["h1", "h2", "h3"], BASE, BASE + DAY,
+                                   source="auto", client=down)
+    assert report["stale"] is True
+    assert down.calls == 1  # retries already burned by the client; stop here
+
+
 def test_notes_from_raw_and_flattened_fallback(tmp_path):
     store = seed_store(tmp_path)
     fake = FakeClient()

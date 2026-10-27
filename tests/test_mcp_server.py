@@ -157,7 +157,38 @@ def test_device_health_refresh_and_apiary_filter():
     stub = Stub()
     assert _hives_for_apiary(stub, "a2") == ["h2"]
     assert _hives_for_apiary(stub, "One") == ["h1"]
+    # Battery-consistent matching: case-insensitive substring on the name.
+    assert _hives_for_apiary(stub, "one") == ["h1"]
+    assert _hives_for_apiary(stub, "TWO") == ["h2"]
     assert sorted(_hives_for_apiary(stub, None)) == ["h1", "h2"]
+
+    # device_health refresh branch: non-sandbox store, bounded window.
+    from bm.mcp_server import device_health as _dh
+
+    class RecordingStore:
+        def __init__(self):
+            self.ensure_args = None
+
+        def topology(self):
+            return Stub().topology()
+
+        def coverage(self):
+            return {}
+
+        def ensure_coverage(self, hive_ids, start, end, source="auto", client=None):
+            self.ensure_args = (list(hive_ids), start, end, source)
+            return {"stale": True, "fetched_windows": 0,
+                    "covered_end": {}, "source": source}
+
+        def iter_readings(self, hive_id=None, start=None, end=None):
+            return iter([])
+
+    rec = RecordingStore()
+    out = _dh(rec, apiary="one", stale_days=7, now_ts=NOW)
+    assert rec.ensure_args is not None
+    assert rec.ensure_args[0] == ["h1"]  # apiary-filtered refresh set
+    assert rec.ensure_args[2] - rec.ensure_args[1] == 7 * 86400  # bounded window
+    assert out["provenance"]["stale"] is True  # real sync provenance
 
 
 def test_main_entrypoint_and_stdout_guard(capsys, monkeypatch):

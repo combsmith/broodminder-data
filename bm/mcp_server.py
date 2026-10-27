@@ -134,13 +134,18 @@ def hive_notes(store: Any, hive_id: str, days: int = 30, limit: int = 20,
 
 
 def _hives_for_apiary(store: Any, apiary: str | None) -> list[str]:
-    """Hive IDs in the named apiary (matched by ID or name), or all hives."""
+    """Hive IDs in the named apiary, or all hives when unset.
+
+    Matching mirrors ``bm.battery``'s apiary filter: exact ID match, or
+    case-insensitive substring match on the apiary name.
+    """
     all_hives: list[str] = []
     for entry in _topology(store):
         in_apiary = (
             not apiary
             or str(entry.get("apiaryId") or "") == str(apiary)
-            or str(entry.get("apiaryName") or "") == str(apiary)
+            or (bool(apiary) and str(apiary).lower()
+                in str(entry.get("apiaryName") or "").lower())
         )
         for hive in entry.get("hives", []) or []:
             if hive.get("hiveId") is not None and (in_apiary or not apiary):
@@ -156,13 +161,12 @@ def device_health(store: Any, apiary: str | None = None, threshold: int = 80,
         provenance = {"source": "sandbox", "stale": False, "fetched_windows": 0}
     else:
         # Refresh coverage for known hives first so classification is not
-        # silently based on stale local data.
+        # silently based on stale local data. The window is bounded to
+        # stale_days: freshness classification needs only recent data,
+        # and a full-history fetch inside a read-only tool would burn
+        # the daily API budget.
         hives = _hives_for_apiary(store, apiary)
-        cov = store.coverage() if hasattr(store, "coverage") else {}
-        start = min(
-            [cov.get(h, {}).get("covered_start", now - 30 * 86400) for h in hives]
-            or [now - 30 * 86400]
-        )
+        start = now - max(1, stale_days) * 86400
         provenance = _prepare(store, hives, start, now, source, now_ts) if hives else {
             "source": source, "stale": False, "fetched_windows": 0}
     devices = scan_device_health_from_stream(
