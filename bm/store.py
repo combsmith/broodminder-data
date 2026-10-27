@@ -95,13 +95,20 @@ class LocalStore:
 
     def _save_completed(self, manifest: dict[str, Any]) -> None:
         """Persist ``manifest``'s completed windows, merging any records
-        written by another process since ``manifest`` was loaded."""
+        written by another process since ``manifest`` was loaded.
+
+        The ``completed`` dict identity is preserved: callers holding a
+        reference to it (e.g. the sync loop) must keep writing into the
+        live mapping after a save.
+        """
         fresh = self._load_manifest()
-        fresh.setdefault("completed", {}).update(manifest.get("completed", {}))
-        fresh.setdefault("meta", {}).update(manifest.get("meta", {}))
-        self._save_manifest(fresh)
-        manifest.clear()
-        manifest.update(fresh)
+        completed = manifest.setdefault("completed", {})
+        for key, rec in fresh.get("completed", {}).items():
+            completed.setdefault(key, rec)
+        meta = manifest.setdefault("meta", {})
+        for key, value in fresh.get("meta", {}).items():
+            meta.setdefault(key, value)
+        self._save_manifest(manifest)
 
     def coverage(self) -> dict[str, dict[str, Any]]:
         """Per-hive covered window derived from the manifest."""
@@ -136,12 +143,14 @@ class LocalStore:
             hive_names.setdefault(hid, row.get("hiveName"))
             if row.get("deviceId"):
                 devices.setdefault(hid, set()).add(str(row["deviceId"]))
-            if hid not in meta:
-                meta[hid] = {
-                    "apiaryId": row.get("apiaryId"),
-                    "apiaryName": row.get("apiaryName"),
-                    "hiveName": row.get("hiveName"),
-                }
+            entry = meta.setdefault(
+                hid, {"apiaryId": None, "apiaryName": None, "hiveName": None}
+            )
+            # Fill any fields the manifest record lacks from archived rows,
+            # so a counts-only sync record cannot orphan a named hive.
+            for field in ("apiaryId", "apiaryName", "hiveName"):
+                if entry.get(field) is None and row.get(field) is not None:
+                    entry[field] = row.get(field)
         apiaries: dict[str, dict[str, Any]] = {}
         for hid, m in meta.items():
             key = str(m.get("apiaryId") or m.get("apiaryName") or "")
@@ -421,6 +430,24 @@ class LocalStore:
         if source not in ("auto", "offline"):
             raise ValueError(f"unknown source {source!r}; use 'auto' or 'offline'")
         hive_list = [_safe_hive_id(h) for h in hive_ids]
+        if source == "offline":
+            # Read-only path: never acquire the (write-requiring) lock, so
+            # offline queries work on read-only data mounts.
+            manifest = self._load_manifest()
+            completed = manifest.get("completed", {})
+            stale = False
+            for h in hive_list:
+                if self._missing_windows(self._completed_intervals(manifest, h), start, end):
+                    stale = True
+                for key, rec in completed.items():
+                    parts = key.rsplit("|", 2)
+                    if len(parts) == 3 and parts[0] == h and rec.get("notes_missing"):
+                        stale = True
+            return {
+                "stale": stale, "fetched_windows": 0,
+                "covered_end": {h: self._covered_end(manifest, h, start) for h in hive_list},
+                "source": source,
+            }
         with self._locked():
             return self._ensure_coverage_locked(hive_list, start, end, source, client)
 

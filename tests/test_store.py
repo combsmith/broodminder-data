@@ -220,6 +220,40 @@ def test_small_tail_not_fetched(tmp_path):
     assert fake.calls == 0
 
 
+def test_multi_hive_sync_persists_all_windows(tmp_path):
+    store = LocalStore(tmp_path)
+    fake = FakeClient()
+    r1 = store.ensure_coverage(["h1", "h2"], BASE, BASE + DAY, source="auto", client=fake)
+    assert r1["fetched_windows"] == 2
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert any(k.startswith("h1|") for k in manifest["completed"])
+    assert any(k.startswith("h2|") for k in manifest["completed"])
+    calls = fake.calls
+    r2 = store.ensure_coverage(["h1", "h2"], BASE, BASE + DAY, source="auto", client=fake)
+    assert r2["fetched_windows"] == 0 and fake.calls == calls
+
+
+def test_topology_fills_metadata_from_archive(tmp_path):
+    store = LocalStore(tmp_path)
+    (tmp_path / "manifest.json").write_text(json.dumps(
+        {"completed": {f"h9|{BASE}|{BASE + DAY}": {"reading_rows": 1}}, "meta": {}}))
+    (tmp_path / "readings.ndjson").write_text(json.dumps(
+        {"hiveId": "h9", "hiveName": "Named Hive", "apiaryId": "a9",
+         "apiaryName": "Named Apiary", "deviceId": "d9", "positionID": "p",
+         "timestamp": BASE, "m_weight": 1.0}) + "\n")
+    topo = store.topology()
+    assert topo[0]["apiaryName"] == "Named Apiary"
+    assert topo[0]["hives"][0]["hiveName"] == "Named Hive"
+
+
+def test_offline_needs_no_writable_store(tmp_path):
+    missing = tmp_path / "nope"
+    store = LocalStore(missing)
+    report = store.ensure_coverage(["h1"], BASE, BASE + DAY, source="offline")
+    assert report["stale"] is True
+    assert not missing.exists()  # no lock file / directory created
+
+
 def test_notes_from_raw_and_flattened_fallback(tmp_path):
     store = seed_store(tmp_path)
     fake = FakeClient()
