@@ -14,7 +14,11 @@ def test_deterministic_same_now():
     a = sandbox_readings(NOW)
     b = sandbox_readings(NOW)
     assert a == b
-    assert sandbox_notes(NOW) == sandbox_notes(NOW)
+    assert a is not b
+    notes_a = sandbox_notes(NOW)
+    notes_b = sandbox_notes(NOW)
+    assert notes_a == notes_b
+    assert notes_a is not notes_b
 
 
 def test_three_scenario_hives_and_health_classification():
