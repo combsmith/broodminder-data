@@ -465,7 +465,8 @@ class LocalStore:
                     stale = True
                 for key, rec in completed.items():
                     parts = key.rsplit("|", 2)
-                    if len(parts) == 3 and parts[0] == h and rec.get("notes_missing"):
+                    notes_unknown = rec.get("notes_missing") or "notes" not in rec
+                    if len(parts) == 3 and parts[0] == h and notes_unknown:
                         stale = True
             return {
                 "stale": stale, "fetched_windows": 0,
@@ -507,7 +508,10 @@ class LocalStore:
             out: list[tuple[int, int]] = []
             for key, rec in completed.items():
                 parts = key.rsplit("|", 2)
-                if len(parts) == 3 and parts[0] == hive and rec.get("notes_missing"):
+                # A record with no notes-completion info at all (e.g. from
+                # `extract_all.py --no-notes`) also needs a notes-only fetch.
+                notes_unknown = rec.get("notes_missing") or "notes" not in rec
+                if len(parts) == 3 and parts[0] == hive and notes_unknown:
                     try:
                         s, e = int(parts[1]), int(parts[2])
                     except ValueError:
@@ -548,11 +552,16 @@ class LocalStore:
         stale = False
 
         def _fetch_notes(hive: str, s: int, e: int, rec: dict[str, Any]) -> bool:
+            nonlocal network_down
             try:
                 notes = client.hive_notes(hive, s, e, raw=True)
             except Exception as exc:  # tracked separately; readings stay complete
                 _log(f"store: notes fetch failed for hive {hive} window {s}-{e}: {exc}")
                 rec["notes_missing"] = True
+                if isinstance(exc, BroodMinderError) and exc.status in (0, 429):
+                    # Transport down or quota exhausted (client already
+                    # burned its retries): abort the rest of the batch.
+                    network_down = True
                 return False
             hive_dir = self.raw / hive
             hive_dir.mkdir(parents=True, exist_ok=True)
@@ -588,7 +597,7 @@ class LocalStore:
                     except (BroodMinderError, httpx.HTTPError, ValueError) as exc:
                         _log(f"store: live fetch failed for hive {hive} [{s},{e}): {exc}")
                         stale = True
-                        if isinstance(exc, BroodMinderError) and exc.status == 0:
+                        if isinstance(exc, BroodMinderError) and exc.status in (0, 429):
                             network_down = True
                         break
                     hive_dir = self.raw / hive
@@ -604,6 +613,8 @@ class LocalStore:
                     completed[key] = rec
                     self._save_completed(manifest)
                     fetched += 1
+                    if network_down:
+                        break
                 covered_end[hive] = self._covered_end(manifest, hive, start)
                 if self._missing_windows(self._completed_intervals(manifest, hive), start, fetch_end):
                     stale = True

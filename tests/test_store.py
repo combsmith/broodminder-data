@@ -297,6 +297,27 @@ def test_transport_failure_aborts_remaining_hives(tmp_path):
     assert down.calls == 1  # retries already burned by the client; stop here
 
 
+def test_legacy_no_notes_record_gets_notes_only_fetch(tmp_path):
+    # Manifest written by extract_all.py --no-notes: no notes info at all.
+    store = LocalStore(tmp_path)
+    (tmp_path / "manifest.json").write_text(json.dumps(
+        {"completed": {f"h1|{BASE}|{BASE + DAY}": {"reading_rows": 3}}, "meta": {}}))
+    fake = FakeClient()
+    report = store.ensure_coverage(["h1"], BASE, BASE + DAY, source="auto", client=fake)
+    assert report["fetched_windows"] == 0  # readings not refetched
+    assert report["stale"] is False
+    assert list(store.iter_notes("h1"))  # notes now fetched
+
+
+def test_rate_limit_aborts_remaining_hives(tmp_path):
+    store = LocalStore(tmp_path)
+    fake = FakeClient(fail=True)  # hive_readings raises RateLimited
+    report = store.ensure_coverage(["h1", "h2", "h3"], BASE, BASE + DAY,
+                                   source="auto", client=fake)
+    assert report["stale"] is True
+    assert fake.calls == 1  # batch aborted after first exhausted 429
+
+
 def test_notes_from_raw_and_flattened_fallback(tmp_path):
     store = seed_store(tmp_path)
     fake = FakeClient()
