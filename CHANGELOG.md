@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Pinned the `mcp` optional dependency to `<2` (FastMCP API; 2.x renamed it to `MCPServer`).
+- Bumped `filelock` from 3.29.7 to 4.2.1 in `scripts/pip-audit-requirements.txt` (#214).
 
 ## [0.1.8] - 2026-10-13
 
