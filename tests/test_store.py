@@ -318,6 +318,38 @@ def test_rate_limit_aborts_remaining_hives(tmp_path):
     assert fake.calls == 1  # batch aborted after first exhausted 429
 
 
+def test_anonymous_notes_not_collapsed_by_dedupe(tmp_path):
+    store = LocalStore(tmp_path)
+    hdir = tmp_path / "raw" / "h1"
+    hdir.mkdir(parents=True)
+    payload = {"notes": [{"text": "first inspection"}, {"text": "second inspection"},
+                         {"note": "third inspection"}]}
+    with gzip.open(hdir / "1-2.notes.json.gz", "wt") as fh:
+        json.dump(payload, fh)
+    texts = sorted(n.get("text") or n.get("note") for n in store.iter_notes("h1"))
+    assert texts == ["first inspection", "second inspection", "third inspection"]
+
+
+def test_notes_retry_aborts_on_rate_limit(tmp_path):
+    from bm.client import RateLimited
+
+    class NotesDown(FakeClient):
+        def hive_notes(self, hive_id, start, end, raw=True):
+            self.calls += 1
+            raise RateLimited(429, "GET", "http://x", "daily limit exceeded")
+
+    store = LocalStore(tmp_path)
+    manifest = {"completed": {
+        f"h1|{BASE}|{BASE + DAY}": {"reading_rows": 1, "notes_missing": True},
+        f"h1|{BASE + DAY}|{BASE + 2 * DAY}": {"reading_rows": 1, "notes_missing": True},
+    }, "meta": {}}
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    down = NotesDown()
+    report = store.ensure_coverage(["h1"], BASE, BASE + 2 * DAY, source="auto", client=down)
+    assert report["stale"] is True
+    assert down.calls == 1  # aborted after first exhausted 429, not per window
+
+
 def test_notes_from_raw_and_flattened_fallback(tmp_path):
     store = seed_store(tmp_path)
     fake = FakeClient()

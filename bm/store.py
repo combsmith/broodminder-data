@@ -297,12 +297,9 @@ class LocalStore:
             )
         rows = (row for src in sources for row in src)
         for row in rows:
-            hid = str(row.get("hiveId") or "")
-            dk = (row.get("positionID"), row.get("deviceId"), row.get("timestamp"))
-            hive_seen = seen.setdefault(hid, set())
-            if dk in hive_seen:
-                continue
-            hive_seen.add(dk)
+            # Filter first: dedupe keys are retained only for rows the
+            # caller asked for, so a narrow query does not hold keys for
+            # the entire archive in memory.
             if hive_id is not None and str(row.get("hiveId") or "") != str(hive_id):
                 continue
             ts = row.get("timestamp")
@@ -310,6 +307,12 @@ class LocalStore:
                 continue
             if end is not None and (ts is None or ts >= end):
                 continue
+            hid = str(row.get("hiveId") or "")
+            dk = (row.get("positionID"), row.get("deviceId"), row.get("timestamp"))
+            hive_seen = seen.setdefault(hid, set())
+            if dk in hive_seen:
+                continue
+            hive_seen.add(dk)
             yield row
 
     def iter_notes(self, hive_id: str | int | None = None) -> Iterator[dict[str, Any]]:
@@ -336,7 +339,8 @@ class LocalStore:
                         continue
                     items = payload if isinstance(payload, list) else (payload or {}).get("notes", [])
                     for note in items or []:
-                        key = (hdir.name, note.get("id") or (note.get("created"), note.get("description")))
+                        note_text = note.get("text") or note.get("note")
+                        key = (hdir.name, note.get("id") or (note.get("created"), note.get("description"), note_text))
                         if key in seen:
                             continue
                         seen.add(key)
@@ -352,7 +356,8 @@ class LocalStore:
                     continue
                 if hive_id is not None and str(note.get("hiveId") or "") != str(hive_id):
                     continue
-                key = (str(note.get("hiveId") or ""), note.get("id") or (note.get("created"), note.get("description")))
+                note_text = note.get("text") or note.get("note")
+                key = (str(note.get("hiveId") or ""), note.get("id") or (note.get("created"), note.get("description"), note_text))
                 if key in seen:
                     continue
                 seen.add(key)
@@ -588,6 +593,11 @@ class LocalStore:
                     if not _fetch_notes(hive, s, e, rec):
                         stale = True
                     self._save_completed(manifest)
+                    if network_down:
+                        break
+                if network_down:
+                    stale = True
+                    break  # skip readings fetch and remaining hives
                 for s, e in missing[hive]:
                     key = f"{hive}|{s}|{e}"
                     if key in completed:
