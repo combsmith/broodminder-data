@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- MCP server (`bm/mcp_server.py`, `broodminder-mcp` entry point): FastMCP stdio server with five read-only tools (`get_apiary_summary`, `get_hive_status`, `get_telemetry_trends`, `get_hive_notes`, `get_device_health`), three resources, and two prompts (`inspection_prep`, `device_health_audit`) (#218, #222, #223, #224).
+- `bm/analytics.py`: pure latest-status and bucketed telemetry trend aggregation shared by MCP tools (#219).
+- `bm/store.py`: offline-first local store over `data/extract/` — live sync fetches only the missing tail per hive and never re-fetches a completed window (#220).
+- `bm/sandbox.py`: deterministic synthetic dataset (`broodminder-mcp --sandbox`) for keyless MCP demos and tests (#221).
+
+### Fixed
+- README documentation drift: SDK example now uses the real `BroodMinderClient` API, MCP section documents the shipped server, and planned unified-CLI/typed-model work is marked as planned (#217).
+
+### Changed
+- Pinned the `mcp` optional dependency to `<2` (FastMCP API; 2.x renamed it to `MCPServer`).
+
 ## [0.1.8] - 2026-10-13
 
 ### Security

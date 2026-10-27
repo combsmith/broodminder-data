@@ -93,7 +93,16 @@ class BroodMinderClient:
         last_exc: Exception | None = None
         for attempt in range(self.max_retries + 1):
             self.call_count += 1
-            resp = self._client.get(path, params=params)
+            try:
+                resp = self._client.get(path, params=params)
+            except httpx.TransportError as exc:
+                # Network down / timeout: retry, then surface as a
+                # BroodMinderError so callers can fall back to local data.
+                last_exc = BroodMinderError(0, "GET", path, f"transport error: {exc}")
+                if attempt < self.max_retries:
+                    time.sleep(min(2 ** attempt, 30))
+                    continue
+                raise last_exc from exc
             if resp.status_code == 429:
                 retry_after = float(resp.headers.get("Retry-After", 2 ** attempt))
                 last_exc = RateLimited(429, "GET", str(resp.url), resp.text)
