@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-27
+
 ### Added
 - MCP server (`bm/mcp_server.py`, `broodminder-mcp` entry point): FastMCP stdio server with five read-only tools (`get_apiary_summary`, `get_hive_status`, `get_telemetry_trends`, `get_hive_notes`, `get_device_health`), three resources, and two prompts (`inspection_prep`, `device_health_audit`) (#218, #222, #223, #224).
 - `bm/analytics.py`: pure latest-status and bucketed telemetry trend aggregation shared by MCP tools (#219).
@@ -88,7 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Authoritative OpenAPI 3.1 specification for the External User API (`openapi/broodminder-openapi.yaml`) with Redocly linting and interactive docs preview.
 - PyPI onboarding probe, build verification, and Trusted Publishing OIDC workflow.
 
-[Unreleased]: https://github.com/combsmith/broodminder-data/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/combsmith/broodminder-data/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/combsmith/broodminder-data/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/combsmith/broodminder-data/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/combsmith/broodminder-data/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/combsmith/broodminder-data/compare/v0.1.5...v0.1.6
