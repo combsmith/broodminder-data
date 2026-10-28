@@ -57,23 +57,21 @@ def max_document_bytes() -> int:
 def open_binary(path: Path | str) -> BinaryIO:
     """Open ``path`` for binary reading, decompressing when it ends in ``.gz``.
 
-    Validates the path to prevent traversal attacks by checking for parent
-    directory references before resolution.
+    Validates the path with canonical resolution to prevent traversal attacks,
+    ensuring the resolved path is within the current working directory.
     """
     path = Path(path)
-    # Check for explicit parent directory references (before resolution to detect
-    # attempts like "../../etc/passwd" or symlinks with ".." in their targets).
-    if ".." in path.parts:
+    # Canonicalize the path to resolve symlinks and relative components.
+    resolved = os.path.realpath(path)
+    base_dir = os.path.realpath(os.getcwd())
+    # Ensure the resolved path is within the current working directory.
+    # The base_dir must end with a separator to prevent partial path traversal.
+    if resolved != base_dir and not resolved.startswith(base_dir + os.sep):
         raise ValueError(f"Path traversal not allowed: {path}")
 
-    # Check the final filename to ensure it's a regular file reference, not a
-    # directory or device. This catches attempts to read from special files.
-    if not path.name or path.name in (".", ".."):
-        raise ValueError(f"Invalid path: {path}")
-
     if path.name.lower().endswith(".gz"):
-        return gzip.open(path, "rb")  # type: ignore[return-value]
-    return open(path, "rb")
+        return gzip.open(resolved, "rb")  # type: ignore[return-value]
+    return open(resolved, "rb")
 
 
 def iter_bounded_lines(fh: BinaryIO, source: Path | str, limit: int | None = None) -> Iterator[str]:
