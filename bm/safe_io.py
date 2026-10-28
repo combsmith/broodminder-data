@@ -63,8 +63,25 @@ def open_binary(path: Path | str) -> BinaryIO:
     Paths come from trusted local configuration (data dir, ``--data``, local
     store directories). Callers must validate that paths originate from trusted
     sources and are within allowed directories if path restrictions are required.
+
+    Args:
+        path: A path to a local file. The path must not contain traversal attempts
+              (e.g., '..' components), which are rejected to prevent accidental
+              path traversal when paths are LLM-generated or come from untrusted
+              parsing.
+
+    Raises:
+        ValueError: If the path contains parent directory traversal components.
+        FileNotFoundError: If the resolved path is not a regular file.
     """
     input_path = Path(path)
+    # Reject paths with '..' to prevent traversal attacks when paths come from
+    # untrusted parsing (e.g., LLM-generated code).
+    for part in input_path.parts:
+        if part == "..":
+            raise ValueError(
+                f"Path traversal attempt detected: {input_path} contains '..' component"
+            )
     # Dispatch on the caller's name: a ``.gz`` symlink may target a file
     # whose own name has no ``.gz`` suffix.
     path = Path(os.path.realpath(input_path))
