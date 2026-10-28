@@ -250,10 +250,6 @@ def scan_device_health_from_file(
     path = Path(file_path).resolve()
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
-    try:
-        path.relative_to(Path.cwd())
-    except ValueError:
-        raise FileNotFoundError(f"File path must be within current working directory: {path}")
 
     is_csv = ".csv" in path.name.lower()
 

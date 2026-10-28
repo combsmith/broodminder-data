@@ -582,8 +582,9 @@ def test_valid_first_csv_record_near_limit_succeeds(tmp_path: Path, monkeypatch:
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         # Header is about 45 bytes
         f.write("deviceId,timestamp,batteryLevel,notes\n")
-        # First record is about 100 bytes (under the 200-byte limit)
-        f.write('dev1,1700000000,85,"' + 'X' * 50 + '"\n')
+        # First record is 172 bytes (under the 200-byte limit), but header plus
+        # record is 210 bytes, so it fails if header bytes are charged to it.
+        f.write('dev1,1700000000,85,"' + 'X' * 150 + '"\n')
 
     # Should parse successfully without raising InputLimitError
     results = scan_device_health_from_file(csv_path, now_ts=10)
