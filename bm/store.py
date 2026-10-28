@@ -358,7 +358,7 @@ class LocalStore:
                         yield {"hiveId": hdir.name, **note}
         notes_path = self.data_dir / "notes.ndjson"
         if notes_path.exists():
-            with open(notes_path, "rb") as fh:
+            with open_binary(notes_path) as fh:
                 for line in iter_bounded_lines(fh, notes_path):
                     if not line.strip():
                         continue
