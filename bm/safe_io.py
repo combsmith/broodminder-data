@@ -54,8 +54,13 @@ def max_document_bytes() -> int:
 
 
 def open_binary(path: Path | str) -> BinaryIO:
-    """Open ``path`` for binary reading, decompressing when it ends in ``.gz``."""
+    """Open ``path`` for binary reading, decompressing when it ends in ``.gz``.
+
+    Rejects paths containing parent directory references to prevent traversal attacks.
+    """
     path = Path(path)
+    if ".." in path.parts:
+        raise ValueError(f"Path traversal not allowed: {path}")
     if path.name.lower().endswith(".gz"):
         return gzip.open(path, "rb")  # type: ignore[return-value]
     return open(path, "rb")
