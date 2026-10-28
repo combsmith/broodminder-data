@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from .safe_io import InputLimitError, iter_bounded_lines, open_binary
+from .safe_io import InputLimitError, iter_bounded_lines, iter_csv_records_bounded, open_binary
 
 
 @dataclass
@@ -257,7 +257,13 @@ def scan_device_health_from_file(
     # file cannot expand into an unbounded single-line allocation.
     with open_binary(path) as fh:
         lines = iter_bounded_lines(fh, path)
-        records = csv.DictReader(lines) if is_csv else _iter_ndjson(lines)
+        if is_csv:
+            # CSV records can span multiple lines (quoted fields with newlines),
+            # so we apply the byte limit cumulatively to complete records.
+            records = iter_csv_records_bounded(lines, path)
+        else:
+            # NDJSON records are single lines, so per-line bounds are sufficient.
+            records = _iter_ndjson(lines)
         # The stream is consumed eagerly here, before the file handle closes.
         return scan_device_health_from_stream(
             records,

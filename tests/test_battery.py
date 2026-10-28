@@ -547,3 +547,24 @@ def test_cli_reports_input_limit_and_exits_2(
     bomb = _gz_lines(tmp_path / "readings.ndjson.gz", ["x" * 1000])
     assert main(["--data", str(bomb)]) == 2
     assert "BROODMINDER_MAX_LINE_BYTES" in capsys.readouterr().err
+
+
+def test_overlong_multiline_csv_record_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Regression: CSV record spanning multiple lines must respect cumulative limit."""
+    from bm.safe_io import InputLimitError
+
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "256")
+    # Create a CSV with a quoted field spanning multiple lines (newline in field).
+    # Each physical line is under 256 bytes, but the complete record exceeds it.
+    csv_path = tmp_path / "readings.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        f.write("deviceId,hiveName,timestamp,batteryLevel,notes\n")
+        # Write a record where the notes field has a newline, spanning 3 physical lines.
+        # Each line is under 256 bytes, but the complete record exceeds it.
+        f.write('dev1,hive1,1700000000,85,"')
+        f.write('A' * 100 + '\n')
+        f.write('B' * 100 + '\n')
+        f.write('C' * 100 + '"\n')
+
+    with pytest.raises(InputLimitError, match="record exceeds"):
+        scan_device_health_from_file(csv_path, now_ts=10)

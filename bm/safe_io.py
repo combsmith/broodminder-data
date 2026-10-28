@@ -16,6 +16,7 @@ Limits (read at call time, so they can be changed per process):
 
 from __future__ import annotations
 
+import csv as csv_module
 import gzip
 import json
 import os
@@ -84,6 +85,54 @@ def iter_bounded_lines(fh: BinaryIO, source: Path | str, limit: int | None = Non
                 f"(set {MAX_LINE_BYTES_ENV} to raise the limit)"
             )
         yield line.decode("utf-8")
+
+
+class _TrackingLineIterator:
+    """Wrapper around a line iterator that tracks cumulative bytes for CSV records."""
+
+    def __init__(self, lines: Iterator[str], source: Path | str, limit: int):
+        self.lines = lines
+        self.source = source
+        self.limit = limit
+        self.cumulative_bytes = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> str:
+        line = next(self.lines)
+        self.cumulative_bytes += len(line.encode("utf-8"))
+        if self.cumulative_bytes > self.limit:
+            raise InputLimitError(
+                f"{self.source}: record exceeds {self.limit} bytes "
+                f"(set {MAX_LINE_BYTES_ENV} to raise the limit)"
+            )
+        # Return line as-is, but reset cumulative counter on record boundaries.
+        # csv.DictReader will signal a new record implicitly; we detect it by
+        # checking if we've just seen a complete line from a multiline record.
+        return line
+
+    def reset_record(self):
+        """Reset cumulative byte counter for next record."""
+        self.cumulative_bytes = 0
+
+
+def iter_csv_records_bounded(
+    lines: Iterator[str], source: Path | str, limit: int | None = None
+) -> Iterator[dict[str, Any]]:
+    """Yield CSV records from bounded lines, enforcing cumulative bytes per record.
+
+    This wraps the line iterator with a tracker that accumulates bytes across
+    all lines belonging to a single CSV record (e.g. multiline quoted fields),
+    and raises InputLimitError if a record exceeds the limit.
+    """
+    if limit is None:
+        limit = max_line_bytes()
+    tracker = _TrackingLineIterator(lines, source, limit)
+    reader = csv_module.DictReader(tracker)
+    for record in reader:
+        yield record
+        tracker.reset_record()
 
 
 def load_json_document(path: Path | str, limit: int | None = None) -> Any:
