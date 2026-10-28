@@ -492,3 +492,58 @@ def test_scripts_battery_health_execution(tmp_path: Path):
     assert "Inspect BroodMinder sensor battery health" in res.stdout
 
 
+
+
+# --- 7. decompression-bomb limits (#228) ----------------------------------------
+
+
+def _gz_lines(path: Path, lines: list[str]) -> Path:
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        for line in lines:
+            fh.write(line + "\n")
+    return path
+
+
+def test_overlong_gzip_ndjson_line_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bm.safe_io import InputLimitError
+
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "1024")
+    ok = json.dumps({"deviceId": "d1", "timestamp": 1, "batteryLevel": 90})
+    bomb = _gz_lines(tmp_path / "readings.ndjson.gz", [ok, " " * 100_000 + "{}"])
+    with pytest.raises(InputLimitError, match="BROODMINDER_MAX_LINE_BYTES"):
+        scan_device_health_from_file(bomb, now_ts=10)
+
+
+def test_overlong_gzip_csv_line_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bm.safe_io import InputLimitError
+
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "1024")
+    bomb = _gz_lines(tmp_path / "readings.csv.gz", ["deviceId,timestamp", "d1," + "9" * 5000])
+    with pytest.raises(InputLimitError):
+        scan_device_health_from_file(bomb, now_ts=10)
+
+
+def test_lines_within_limit_still_parse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "1024")
+    row = json.dumps({"deviceId": "d1", "timestamp": 1, "batteryLevel": 90})
+    path = _gz_lines(tmp_path / "readings.ndjson.gz", [row, "", "not json"])
+    results = scan_device_health_from_file(path, now_ts=10)
+    assert [d.device_id for d in results] == ["d1"]
+
+
+def test_invalid_line_limit_env_fails_clearly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "lots")
+    path = _gz_lines(tmp_path / "readings.ndjson.gz", ["{}"])
+    with pytest.raises(ValueError, match="positive integer"):
+        scan_device_health_from_file(path, now_ts=10)
+
+
+def test_cli_reports_input_limit_and_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    from bm.battery import main
+
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "64")
+    bomb = _gz_lines(tmp_path / "readings.ndjson.gz", ["x" * 1000])
+    assert main(["--data", str(bomb)]) == 2
+    assert "BROODMINDER_MAX_LINE_BYTES" in capsys.readouterr().err

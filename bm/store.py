@@ -22,6 +22,7 @@ from typing import Any, Iterable, Iterator
 import httpx
 
 from .client import BroodMinderClient, BroodMinderError, iter_windows
+from .safe_io import iter_bounded_lines, load_json_document, open_binary
 
 # A truncated/corrupt gzip window must not crash a read (a sync may be
 # writing it concurrently); treat it as absent.
@@ -35,6 +36,25 @@ _HIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # recording that window complete too early.
 MIN_TAIL_SECONDS = 3600
 SETTLE_SECONDS = 900
+
+# Longest [start, end) span ensure_coverage accepts. Lookback lengths are
+# caller-controlled (MCP tool arguments), and each span is split into
+# 180-day API windows, so an unbounded span means unbounded work.
+MAX_COVERAGE_DAYS_ENV = "BROODMINDER_MAX_COVERAGE_DAYS"
+DEFAULT_MAX_COVERAGE_DAYS = 7305  # 20 years: ~41 windows per hive
+
+
+def max_coverage_days() -> int:
+    raw = os.environ.get(MAX_COVERAGE_DAYS_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_MAX_COVERAGE_DAYS
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise ValueError(f"{MAX_COVERAGE_DAYS_ENV} must be a positive integer, got {raw!r}")
+    return value
 
 
 def _safe_hive_id(hive_id: str | int) -> str:
@@ -220,11 +240,7 @@ class LocalStore:
             files = sorted(hdir.glob("*.readings.json.gz")) + sorted(hdir.glob("*.readings.json"))
             for path in files:
                 try:
-                    if path.suffix == ".gz":
-                        with gzip.open(path, "rt", encoding="utf-8") as fh:
-                            payload = json.load(fh)
-                    else:
-                        payload = json.loads(path.read_text(encoding="utf-8"))
+                    payload = load_json_document(path)
                 except _GZIP_READ_ERRORS:
                     continue
                 for pos in payload or []:
@@ -264,10 +280,9 @@ class LocalStore:
         path = self._flat_readings_path()
         if path is None:
             return
-        opener = gzip.open if path.suffix == ".gz" else open
         try:
-            with opener(path, "rt", encoding="utf-8") as fh:
-                for line in fh:
+            with open_binary(path) as fh:
+                for line in iter_bounded_lines(fh, path):
                     line = line.strip()
                     if not line:
                         continue
@@ -330,11 +345,7 @@ class LocalStore:
                 files = sorted(hdir.glob("*.notes.json.gz")) + sorted(hdir.glob("*.notes.json"))
                 for path in files:
                     try:
-                        if path.suffix == ".gz":
-                            with gzip.open(path, "rt", encoding="utf-8") as fh:
-                                payload = json.load(fh)
-                        else:
-                            payload = json.loads(path.read_text(encoding="utf-8"))
+                        payload = load_json_document(path)
                     except _GZIP_READ_ERRORS:
                         continue
                     items = payload if isinstance(payload, list) else (payload or {}).get("notes", [])
@@ -347,21 +358,22 @@ class LocalStore:
                         yield {"hiveId": hdir.name, **note}
         notes_path = self.data_dir / "notes.ndjson"
         if notes_path.exists():
-            for line in notes_path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                try:
-                    note = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if hive_id is not None and str(note.get("hiveId") or "") != str(hive_id):
-                    continue
-                note_text = note.get("text") or note.get("note")
-                key = (str(note.get("hiveId") or ""), note.get("id") or (note.get("created"), note.get("description"), note_text))
-                if key in seen:
-                    continue
-                seen.add(key)
-                yield note
+            with open(notes_path, "rb") as fh:
+                for line in iter_bounded_lines(fh, notes_path):
+                    if not line.strip():
+                        continue
+                    try:
+                        note = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if hive_id is not None and str(note.get("hiveId") or "") != str(hive_id):
+                        continue
+                    note_text = note.get("text") or note.get("note")
+                    key = (str(note.get("hiveId") or ""), note.get("id") or (note.get("created"), note.get("description"), note_text))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    yield note
 
     # -- live tail sync -----------------------------------------------------
     def _locked(self):
@@ -415,8 +427,9 @@ class LocalStore:
         return sorted(intervals)
 
     @staticmethod
-    def _missing_windows(intervals: list[tuple[int, int]], start: int, end: int) -> list[tuple[int, int]]:
-        """Windows covering the parts of [start, end) not in ``intervals``."""
+    def _gaps(intervals: list[tuple[int, int]], start: int, end: int) -> list[tuple[int, int]]:
+        """Parts of [start, end) not in sorted ``intervals`` (at most one
+        per interval, plus one), without splitting them into windows."""
         gaps: list[tuple[int, int]] = []
         cur = start
         for s, e in intervals:
@@ -429,8 +442,17 @@ class LocalStore:
                 break
         if cur < end:
             gaps.append((cur, end))
+        return gaps
+
+    @staticmethod
+    def _missing_windows(intervals: list[tuple[int, int]], start: int, end: int) -> list[tuple[int, int]]:
+        """Windows covering the parts of [start, end) not in ``intervals``.
+
+        Callers must bound ``end - start`` (see ``ensure_coverage``): the
+        result holds one entry per 180-day window of every gap.
+        """
         missing: list[tuple[int, int]] = []
-        for gs, ge in gaps:
+        for gs, ge in LocalStore._gaps(intervals, start, end):
             missing.extend(iter_windows(gs, ge))
         return missing
 
@@ -453,12 +475,20 @@ class LocalStore:
         persists each window before continuing. Completed windows are
         never re-fetched; failed note fetches are tracked separately
         (``notes_missing``) and retried without refetching readings.
-        Failures degrade to ``stale: True`` rather than raising.
+        Failures degrade to ``stale: True`` rather than raising; invalid
+        arguments (including a span over ``BROODMINDER_MAX_COVERAGE_DAYS``)
+        raise ``ValueError``.
         The whole read-modify-write runs under an exclusive file lock.
         """
         if source not in ("auto", "offline"):
             raise ValueError(f"unknown source {source!r}; use 'auto' or 'offline'")
         hive_list = [_safe_hive_id(h) for h in hive_ids]
+        limit_days = max_coverage_days()
+        if end - start > limit_days * 86400:
+            raise ValueError(
+                f"requested interval of {(end - start) // 86400} days exceeds the "
+                f"{limit_days} days limit (set {MAX_COVERAGE_DAYS_ENV} to raise it)"
+            )
         if source == "offline":
             # Read-only path: never acquire the (write-requiring) lock, so
             # offline queries work on read-only data mounts.
@@ -466,7 +496,8 @@ class LocalStore:
             completed = manifest.get("completed", {})
             stale = False
             for h in hive_list:
-                if self._missing_windows(self._completed_intervals(manifest, h), start, end):
+                # Only "is there any gap?" matters here: no window list.
+                if self._gaps(self._completed_intervals(manifest, h), start, end):
                     stale = True
                 for key, rec in completed.items():
                     parts = key.rsplit("|", 2)
@@ -626,7 +657,7 @@ class LocalStore:
                     if network_down:
                         break
                 covered_end[hive] = self._covered_end(manifest, hive, start)
-                if self._missing_windows(self._completed_intervals(manifest, hive), start, fetch_end):
+                if self._gaps(self._completed_intervals(manifest, hive), start, fetch_end):
                     stale = True
         finally:
             if owns_client:

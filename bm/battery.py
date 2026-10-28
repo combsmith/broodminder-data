@@ -9,7 +9,6 @@ indicate that a sensor's battery needs to be checked or replaced.
 from __future__ import annotations
 
 import csv
-import gzip
 import io
 import json
 import time
@@ -17,6 +16,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+
+from .safe_io import InputLimitError, iter_bounded_lines, open_binary
 
 
 @dataclass
@@ -250,12 +251,13 @@ def scan_device_health_from_file(
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
 
-    name = path.name.lower()
-    opener = gzip.open if name.endswith(".gz") else open
-    is_csv = ".csv" in name
+    is_csv = ".csv" in path.name.lower()
 
-    with opener(path, "rt", encoding="utf-8") as fh:
-        records = csv.DictReader(fh) if is_csv else _iter_ndjson(fh)
+    # Lines are read with a byte cap (see bm.safe_io) so a small gzip
+    # file cannot expand into an unbounded single-line allocation.
+    with open_binary(path) as fh:
+        lines = iter_bounded_lines(fh, path)
+        records = csv.DictReader(lines) if is_csv else _iter_ndjson(lines)
         # The stream is consumed eagerly here, before the file handle closes.
         return scan_device_health_from_stream(
             records,
@@ -415,13 +417,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    devices = scan_device_health_from_file(
-        data_file,
-        threshold=args.threshold,
-        critical=args.critical,
-        stale_days=args.stale_days,
-        apiary=args.apiary,
-    )
+    try:
+        devices = scan_device_health_from_file(
+            data_file,
+            threshold=args.threshold,
+            critical=args.critical,
+            stale_days=args.stale_days,
+            apiary=args.apiary,
+        )
+    except InputLimitError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
 
     needs_attention = [d for d in devices if d.needs_attention]
     critical_count = sum(1 for d in devices if d.status == "CRITICAL")
