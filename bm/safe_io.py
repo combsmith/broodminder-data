@@ -153,4 +153,10 @@ def load_json_document(path: Path | str, limit: int | None = None) -> Any:
             f"{path}: decompressed document exceeds {limit} bytes "
             f"(set {MAX_DOCUMENT_BYTES_ENV} to raise the limit)"
         )
-    return json.loads(data.decode("utf-8"))
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise InputLimitError(
+            f"{path}: invalid UTF-8 at byte offset {e.start}: {e.reason}"
+        )
+    return json.loads(decoded)
