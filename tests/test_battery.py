@@ -568,3 +568,25 @@ def test_overlong_multiline_csv_record_rejected(tmp_path: Path, monkeypatch: pyt
 
     with pytest.raises(InputLimitError, match="record exceeds"):
         scan_device_health_from_file(csv_path, now_ts=10)
+
+
+def test_valid_first_csv_record_near_limit_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Boundary test: valid first data record near limit should not raise InputLimitError.
+
+    Ensures that the CSV header is not charged against the first data record's limit.
+    Without consuming the header before resetting the tracker, a valid first record
+    would be incorrectly charged for both header and data bytes.
+    """
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "200")
+    csv_path = tmp_path / "readings.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        # Header is about 45 bytes
+        f.write("deviceId,timestamp,batteryLevel,notes\n")
+        # First record is about 100 bytes (under the 200-byte limit)
+        f.write('dev1,1700000000,85,"' + 'X' * 50 + '"\n')
+
+    # Should parse successfully without raising InputLimitError
+    results = scan_device_health_from_file(csv_path, now_ts=10)
+    assert len(results) == 1
+    assert results[0].device_id == "dev1"
+    assert results[0].battery_percent == 85
