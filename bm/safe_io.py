@@ -48,10 +48,12 @@ def _env_limit(name: str, default: int) -> int:
 
 
 def max_line_bytes() -> int:
+    """Return the configured maximum line byte limit, defaulting to 1 MiB."""
     return _env_limit(MAX_LINE_BYTES_ENV, DEFAULT_MAX_LINE_BYTES)
 
 
 def max_document_bytes() -> int:
+    """Return the configured maximum JSON document byte limit, defaulting to 128 MiB."""
     return _env_limit(MAX_DOCUMENT_BYTES_ENV, DEFAULT_MAX_DOCUMENT_BYTES)
 
 
