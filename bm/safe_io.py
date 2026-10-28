@@ -58,21 +58,13 @@ def max_document_bytes() -> int:
 def open_binary(path: Path | str) -> BinaryIO:
     """Open ``path`` for binary reading, decompressing when it ends in ``.gz``.
 
-    Validates the path with canonical resolution to prevent traversal attacks,
-    ensuring the resolved path is within the current working directory.
+    Paths come from trusted local configuration (data dir, ``--data``), so
+    they are not restricted to the current working directory.
     """
     path = Path(path)
-    # Canonicalize the path to resolve symlinks and relative components.
-    resolved = os.path.realpath(path)
-    base_dir = os.path.realpath(os.getcwd())
-    # Ensure the resolved path is within the current working directory.
-    # The base_dir must end with a separator to prevent partial path traversal.
-    if resolved != base_dir and not resolved.startswith(base_dir + os.sep):
-        raise ValueError(f"Path traversal not allowed: {path}")
-
     if path.name.lower().endswith(".gz"):
-        return gzip.open(resolved, "rb")  # type: ignore[return-value]
-    return open(resolved, "rb")
+        return gzip.open(path, "rb")  # type: ignore[return-value]
+    return open(path, "rb")
 
 
 def iter_bounded_lines(fh: BinaryIO, source: Path | str, limit: int | None = None) -> Iterator[str]:
