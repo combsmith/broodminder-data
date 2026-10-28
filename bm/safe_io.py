@@ -84,7 +84,12 @@ def iter_bounded_lines(fh: BinaryIO, source: Path | str, limit: int | None = Non
                 f"{source}: line exceeds {limit} bytes "
                 f"(set {MAX_LINE_BYTES_ENV} to raise the limit)"
             )
-        yield line.decode("utf-8")
+        try:
+            yield line.decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise InputLimitError(
+                f"{source}: invalid UTF-8 at byte offset {e.start}: {e.reason}"
+            )
 
 
 class _TrackingLineIterator:
