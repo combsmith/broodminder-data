@@ -139,6 +139,7 @@ def iter_csv_records_bounded(
         limit = max_line_bytes()
     tracker = _TrackingLineIterator(lines, source, limit)
     reader = csv_module.DictReader(tracker)
+    tracker.reset_record()  # Clear header bytes before reading data records
     for record in reader:
         yield record
         tracker.reset_record()
