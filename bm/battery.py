@@ -247,9 +247,13 @@ def scan_device_health_from_file(
     apiary: str | None = None,
 ) -> list[DeviceHealth]:
     """Read an NDJSON, CSV, or gzip-compressed file and return evaluated device health."""
-    path = Path(file_path)
+    path = Path(file_path).resolve()
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
+    try:
+        path.relative_to(Path.cwd())
+    except ValueError:
+        raise FileNotFoundError(f"File path must be within current working directory: {path}")
 
     is_csv = ".csv" in path.name.lower()
 
