@@ -247,7 +247,7 @@ def scan_device_health_from_file(
     apiary: str | None = None,
 ) -> list[DeviceHealth]:
     """Read an NDJSON, CSV, or gzip-compressed file and return evaluated device health."""
-    path = Path(file_path).resolve()
+    path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
 

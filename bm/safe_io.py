@@ -63,10 +63,13 @@ def open_binary(path: Path | str) -> BinaryIO:
     Paths come from trusted local configuration (data dir, ``--data``), so
     they are not restricted to the current working directory.
     """
-    path = Path(os.path.realpath(path))
+    input_path = Path(path)
+    # Dispatch on the caller's name: a ``.gz`` symlink may target a file
+    # whose own name has no ``.gz`` suffix.
+    path = Path(os.path.realpath(input_path))
     if not path.is_file():
         raise FileNotFoundError(f"{path}: not a regular file")
-    if path.name.lower().endswith(".gz"):
+    if input_path.name.lower().endswith(".gz"):
         return gzip.open(path, "rb")  # type: ignore[return-value]
     return open(path, "rb")
 

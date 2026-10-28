@@ -243,6 +243,19 @@ def test_scan_device_health_from_ndjson_gz(tmp_path: Path):
     assert by_id["dev-2"].status == "CRITICAL"
 
 
+def test_scan_device_health_from_gz_symlink_without_gz_target(tmp_path: Path):
+    now_ts = 1700000000
+    target = tmp_path / "payload.bin"
+    with gzip.open(target, "wt", encoding="utf-8") as f:
+        f.write(json.dumps({"deviceId": "dev-1", "hiveName": "H1", "apiaryName": "A1",
+                            "timestamp": now_ts - 100, "batteryLevel": 90}) + "\n")
+    link = tmp_path / "readings.ndjson.gz"
+    link.symlink_to(target)
+
+    results = scan_device_health_from_file(link, now_ts=now_ts, threshold=80, critical=25)
+    assert [d.device_id for d in results] == ["dev-1"]
+
+
 def test_scan_device_health_from_csv(tmp_path: Path):
     now_ts = 1700000000
     file_path = tmp_path / "readings.csv"
