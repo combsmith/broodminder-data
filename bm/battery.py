@@ -246,7 +246,12 @@ def scan_device_health_from_file(
     stale_days: int = 7,
     apiary: str | None = None,
 ) -> list[DeviceHealth]:
-    """Read an NDJSON, CSV, or gzip-compressed file and return evaluated device health."""
+    """Read an NDJSON, CSV, or gzip-compressed file and return evaluated device health.
+
+    Args:
+        file_path: Path to a trusted local file (from configuration, CLI arguments, or
+                   preconfigured data directories). Must come from a trusted source.
+    """
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")

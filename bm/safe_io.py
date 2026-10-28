@@ -60,8 +60,9 @@ def max_document_bytes() -> int:
 def open_binary(path: Path | str) -> BinaryIO:
     """Open ``path`` for binary reading, decompressing when it ends in ``.gz``.
 
-    Paths come from trusted local configuration (data dir, ``--data``), so
-    they are not restricted to the current working directory.
+    Paths come from trusted local configuration (data dir, ``--data``, local
+    store directories). Callers must validate that paths originate from trusted
+    sources and are within allowed directories if path restrictions are required.
     """
     input_path = Path(path)
     # Dispatch on the caller's name: a ``.gz`` symlink may target a file
