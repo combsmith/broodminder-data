@@ -89,7 +89,10 @@ def open_binary(path: Path | str) -> BinaryIO:
         raise FileNotFoundError(f"{path}: not a regular file")
     if input_path.name.lower().endswith(".gz"):
         return gzip.open(path, "rb")  # type: ignore[return-value]
-    return open(path, "rb")
+    # NOSONAR: path is operator-supplied local config (CLI --data / data dir), not
+    # model or network input; '..' components are rejected and the realpath is
+    # verified to be a regular file above. No fixed base dir exists to confine to.
+    return open(path, "rb")  # NOSONAR
 
 
 def iter_bounded_lines(fh: BinaryIO, source: Path | str, limit: int | None = None) -> Iterator[str]:
