@@ -34,6 +34,7 @@ class InputLimitError(ValueError):
 
 
 def _env_limit(name: str, default: int) -> int:
+    """Read an environment variable as a positive integer byte limit, or return the default."""
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
         return default

@@ -45,6 +45,7 @@ DEFAULT_MAX_COVERAGE_DAYS = 7305  # 20 years: ~41 windows per hive
 
 
 def max_coverage_days() -> int:
+    """Read the maximum coverage span (days) from environment or return the default."""
     raw = os.environ.get(MAX_COVERAGE_DAYS_ENV)
     if raw is None or raw.strip() == "":
         return DEFAULT_MAX_COVERAGE_DAYS
@@ -70,6 +71,7 @@ def _log(msg: str) -> None:
 
 
 def resolve_data_dir(data_dir: Path | str | None = None) -> Path:
+    """Resolve the data directory from argument, environment variable, or default."""
     if data_dir is not None:
         return Path(data_dir)
     env = os.environ.get("BROODMINDER_DATA_DIR")
@@ -88,6 +90,7 @@ class LocalStore:
 
     # -- manifest ---------------------------------------------------------
     def _load_manifest(self) -> dict[str, Any]:
+        """Load and parse the manifest file, or return an empty manifest if missing/corrupt."""
         if self.manifest_path.exists():
             try:
                 return json.loads(self.manifest_path.read_text(encoding="utf-8"))
@@ -270,6 +273,7 @@ class LocalStore:
                         }
 
     def _flat_readings_path(self) -> Path | None:
+        """Find the flattened readings file (gzipped or plain), or None if missing/empty."""
         for name in ("readings.ndjson.gz", "readings.ndjson"):
             p = self.data_dir / name
             if p.exists() and p.stat().st_size > 0:
@@ -277,6 +281,7 @@ class LocalStore:
         return None
 
     def _iter_flat_readings(self) -> Iterator[dict[str, Any]]:
+        """Stream reading records from the flattened archive (NDJSON), skipping malformed lines."""
         path = self._flat_readings_path()
         if path is None:
             return
@@ -397,6 +402,7 @@ class LocalStore:
 
         @contextlib.contextmanager
         def _cm():
+            """Acquire and hold exclusive file lock for read-modify-write on the manifest."""
             self.data_dir.mkdir(parents=True, exist_ok=True)
             with open(self.data_dir / ".sync.lock", "a+") as fh:
                 if fcntl is not None:
@@ -416,6 +422,7 @@ class LocalStore:
         return _cm()
 
     def _completed_intervals(self, manifest: dict[str, Any], hive: str) -> list[tuple[int, int]]:
+        """Extract and sort the completed [start, end) intervals for a hive from the manifest."""
         intervals: list[tuple[int, int]] = []
         for key in manifest.get("completed", {}):
             parts = key.rsplit("|", 2)
@@ -526,6 +533,7 @@ class LocalStore:
     def _ensure_coverage_locked(
         self, hive_list: list[str], start: int, end: int, source: str, client: Any
     ) -> dict[str, Any]:
+        """Fetch and persist missing windows and notes for the specified hives (called under lock)."""
         # Settle lag: never fetch the most recent SETTLE_SECONDS, so
         # late-arriving BLE uploads are not locked out of a window that
         # was recorded complete before they arrived.
@@ -541,6 +549,7 @@ class LocalStore:
         covered_end = {h: self._covered_end(manifest, h, start) for h in hive_list}
 
         def _notes_missing(hive: str) -> list[tuple[int, int]]:
+            """Find windows for a hive that are missing notes or have unknown notes status."""
             out: list[tuple[int, int]] = []
             for key, rec in completed.items():
                 parts = key.rsplit("|", 2)
@@ -588,6 +597,7 @@ class LocalStore:
         stale = False
 
         def _fetch_notes(hive: str, s: int, e: int, rec: dict[str, Any]) -> bool:
+            """Fetch and persist notes for a window; return True on success, False if failed."""
             nonlocal network_down
             try:
                 notes = client.hive_notes(hive, s, e, raw=True)
