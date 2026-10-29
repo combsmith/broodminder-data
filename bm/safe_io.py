@@ -65,23 +65,14 @@ def open_binary(path: Path | str) -> BinaryIO:
     sources and are within allowed directories if path restrictions are required.
 
     Args:
-        path: A path to a local file. The path must not contain traversal attempts
-              (e.g., '..' components), which are rejected to prevent accidental
-              path traversal when paths are LLM-generated or come from untrusted
-              parsing.
+        path: A path to a local file. Relative paths with ``..`` components are
+              valid and are resolved; callers that need directory confinement
+              must check the resolved path against their allowed directory.
 
     Raises:
-        ValueError: If the path contains parent directory traversal components.
         FileNotFoundError: If the resolved path is not a regular file.
     """
     input_path = Path(path)
-    # Reject paths with '..' to prevent traversal attacks when paths come from
-    # untrusted parsing (e.g., LLM-generated code).
-    for part in input_path.parts:
-        if part == "..":
-            raise ValueError(
-                f"Path traversal attempt detected: {input_path} contains '..' component"
-            )
     # Dispatch on the caller's name: a ``.gz`` symlink may target a file
     # whose own name has no ``.gz`` suffix.
     path = Path(os.path.realpath(input_path))
@@ -90,8 +81,8 @@ def open_binary(path: Path | str) -> BinaryIO:
     if input_path.name.lower().endswith(".gz"):
         return gzip.open(path, "rb")  # type: ignore[return-value]
     # NOSONAR: path is operator-supplied local config (CLI --data / data dir), not
-    # model or network input; '..' components are rejected and the realpath is
-    # verified to be a regular file above. No fixed base dir exists to confine to.
+    # model or network input; the realpath is verified to be a regular file
+    # above. No fixed base dir exists to confine to.
     return open(path, "rb")  # NOSONAR
 
 
@@ -135,6 +126,11 @@ class _TrackingLineIterator:
     def __next__(self) -> str:
         """Return the next line and accumulate its byte count, raising InputLimitError if it exceeds the limit."""
         line = next(self.lines)
+        # A bare newline at a record boundary is a blank row that DictReader
+        # skips (a quoted field always starts with a quote), so don't charge it
+        # to the next real record.
+        if self.cumulative_bytes == 0 and line in ("\n", "\r\n"):
+            return line
         self.cumulative_bytes += len(line.encode("utf-8"))
         if self.cumulative_bytes > self.limit:
             raise InputLimitError(

@@ -604,3 +604,30 @@ def test_valid_first_csv_record_near_limit_succeeds(tmp_path: Path, monkeypatch:
     assert len(results) == 1
     assert results[0].device_id == "dev1"
     assert results[0].battery_percent == 85
+
+
+def test_blank_lines_before_csv_record_not_charged_to_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Blank rows skipped by DictReader must not count toward the next record's limit."""
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "200")
+    csv_path = tmp_path / "readings.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        f.write("deviceId,timestamp,batteryLevel,notes\n")
+        f.write("\n" * 100)
+        f.write('dev1,1700000000,85,"' + "X" * 150 + '"\n')
+
+    results = scan_device_health_from_file(csv_path, now_ts=10)
+    assert len(results) == 1
+    assert results[0].battery_percent == 85
+
+
+def test_open_binary_allows_relative_path_with_dotdot(tmp_path: Path):
+    """A path like data/../data/file is valid and must open."""
+    from bm.safe_io import open_binary
+
+    (tmp_path / "data").mkdir()
+    target = tmp_path / "data" / "f.ndjson"
+    target.write_bytes(b"{}\n")
+    with open_binary(tmp_path / "data" / ".." / "data" / "f.ndjson") as fh:
+        assert fh.read() == b"{}\n"
