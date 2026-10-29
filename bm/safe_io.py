@@ -133,6 +133,7 @@ class _TrackingLineIterator:
         return self
 
     def __next__(self) -> str:
+        """Return the next line and accumulate its byte count, raising InputLimitError if it exceeds the limit."""
         line = next(self.lines)
         self.cumulative_bytes += len(line.encode("utf-8"))
         if self.cumulative_bytes > self.limit:

@@ -191,6 +191,7 @@ class LocalStore:
         return list(apiaries.values())
 
     def _hive_meta(self) -> dict[str, dict[str, Any]]:
+        """Extract per-hive apiary/hive names from the manifest completed windows."""
         meta: dict[str, dict[str, Any]] = {}
         for key, rec in self._load_manifest().get("completed", {}).items():
             hive = key.split("|", 1)[0]
@@ -221,6 +222,7 @@ class LocalStore:
         return meta
 
     def _iter_raw_readings(self, hive_id: str | None) -> Iterator[dict[str, Any]]:
+        """Yield reading records from raw gzipped JSON windows, enriched with manifest and archive metadata."""
         if not self.raw.exists():
             return
         meta = self._hive_meta()
