@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Bounded gzip/NDJSON/JSON reads in `bm.battery` and `LocalStore` (new `bm/safe_io.py`): lines are capped at `BROODMINDER_MAX_LINE_BYTES` (1 MiB) and whole raw-window documents at `BROODMINDER_MAX_DOCUMENT_BYTES` (128 MiB) before they are materialized, raising `InputLimitError` instead of expanding a decompression bomb into memory; the battery CLI exits 2 with the message (#228).
+- `LocalStore.ensure_coverage` rejects intervals longer than `BROODMINDER_MAX_COVERAGE_DAYS` (20 years), so a caller-supplied MCP lookback (`days`, `stale_days`, `lookback_days`) can no longer generate millions of 180-day windows; the offline staleness check now tests for gaps without enumerating windows (#229).
+
 ## [0.2.0] - 2026-10-27
 
 ### Added
