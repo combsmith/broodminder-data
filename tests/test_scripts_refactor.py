@@ -640,3 +640,11 @@ def test_all_caught_up():
     assert extract_all._all_caught_up(manifest, hives, 0, 50)
     assert not extract_all._all_caught_up(manifest, hives, 0, 100)
     assert not extract_all._all_caught_up(manifest, [], 0, 50)
+
+
+def test_hive_meta_preserves_pipe_in_hive_id():
+    manifest = {"completed": {
+        "hive|with|pipe|1000|4200": {"apiaryName": "N", "apiaryId": "A", "hiveName": "H"},
+    }}
+    meta = flatten.hive_meta(manifest)
+    assert list(meta) == ["hive|with|pipe"]
