@@ -243,6 +243,19 @@ def test_scan_device_health_from_ndjson_gz(tmp_path: Path):
     assert by_id["dev-2"].status == "CRITICAL"
 
 
+def test_scan_device_health_from_gz_symlink_without_gz_target(tmp_path: Path):
+    now_ts = 1700000000
+    target = tmp_path / "payload.bin"
+    with gzip.open(target, "wt", encoding="utf-8") as f:
+        f.write(json.dumps({"deviceId": "dev-1", "hiveName": "H1", "apiaryName": "A1",
+                            "timestamp": now_ts - 100, "batteryLevel": 90}) + "\n")
+    link = tmp_path / "readings.ndjson.gz"
+    link.symlink_to(target)
+
+    results = scan_device_health_from_file(link, now_ts=now_ts, threshold=80, critical=25)
+    assert [d.device_id for d in results] == ["dev-1"]
+
+
 def test_scan_device_health_from_csv(tmp_path: Path):
     now_ts = 1700000000
     file_path = tmp_path / "readings.csv"
@@ -492,3 +505,129 @@ def test_scripts_battery_health_execution(tmp_path: Path):
     assert "Inspect BroodMinder sensor battery health" in res.stdout
 
 
+
+
+# --- 7. decompression-bomb limits (#228) ----------------------------------------
+
+
+def _gz_lines(path: Path, lines: list[str]) -> Path:
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        for line in lines:
+            fh.write(line + "\n")
+    return path
+
+
+def test_overlong_gzip_ndjson_line_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bm.safe_io import InputLimitError
+
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "1024")
+    ok = json.dumps({"deviceId": "d1", "timestamp": 1, "batteryLevel": 90})
+    bomb = _gz_lines(tmp_path / "readings.ndjson.gz", [ok, " " * 100_000 + "{}"])
+    with pytest.raises(InputLimitError, match="BROODMINDER_MAX_LINE_BYTES"):
+        scan_device_health_from_file(bomb, now_ts=10)
+
+
+def test_overlong_gzip_csv_line_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from bm.safe_io import InputLimitError
+
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "1024")
+    bomb = _gz_lines(tmp_path / "readings.csv.gz", ["deviceId,timestamp", "d1," + "9" * 5000])
+    with pytest.raises(InputLimitError):
+        scan_device_health_from_file(bomb, now_ts=10)
+
+
+def test_lines_within_limit_still_parse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "1024")
+    row = json.dumps({"deviceId": "d1", "timestamp": 1, "batteryLevel": 90})
+    path = _gz_lines(tmp_path / "readings.ndjson.gz", [row, "", "not json"])
+    results = scan_device_health_from_file(path, now_ts=10)
+    assert [d.device_id for d in results] == ["d1"]
+
+
+def test_invalid_line_limit_env_fails_clearly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "lots")
+    path = _gz_lines(tmp_path / "readings.ndjson.gz", ["{}"])
+    with pytest.raises(ValueError, match="positive integer"):
+        scan_device_health_from_file(path, now_ts=10)
+
+
+def test_cli_reports_input_limit_and_exits_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    from bm.battery import main
+
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "64")
+    bomb = _gz_lines(tmp_path / "readings.ndjson.gz", ["x" * 1000])
+    assert main(["--data", str(bomb)]) == 2
+    assert "BROODMINDER_MAX_LINE_BYTES" in capsys.readouterr().err
+
+
+def test_overlong_multiline_csv_record_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Regression: CSV record spanning multiple lines must respect cumulative limit."""
+    from bm.safe_io import InputLimitError
+
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "256")
+    # Create a CSV with a quoted field spanning multiple lines (newline in field).
+    # Each physical line is under 256 bytes, but the complete record exceeds it.
+    csv_path = tmp_path / "readings.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        f.write("deviceId,hiveName,timestamp,batteryLevel,notes\n")
+        # Write a record where the notes field has a newline, spanning 3 physical lines.
+        # Each line is under 256 bytes, but the complete record exceeds it.
+        f.write('dev1,hive1,1700000000,85,"')
+        f.write('A' * 100 + '\n')
+        f.write('B' * 100 + '\n')
+        f.write('C' * 100 + '"\n')
+
+    with pytest.raises(InputLimitError, match="record exceeds"):
+        scan_device_health_from_file(csv_path, now_ts=10)
+
+
+def test_valid_first_csv_record_near_limit_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Boundary test: valid first data record near limit should not raise InputLimitError.
+
+    Ensures that the CSV header is not charged against the first data record's limit.
+    Without consuming the header before resetting the tracker, a valid first record
+    would be incorrectly charged for both header and data bytes.
+    """
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "200")
+    csv_path = tmp_path / "readings.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        # Header is about 45 bytes
+        f.write("deviceId,timestamp,batteryLevel,notes\n")
+        # First record is 172 bytes (under the 200-byte limit), but header plus
+        # record is 210 bytes, so it fails if header bytes are charged to it.
+        f.write('dev1,1700000000,85,"' + 'X' * 150 + '"\n')
+
+    # Should parse successfully without raising InputLimitError
+    results = scan_device_health_from_file(csv_path, now_ts=10)
+    assert len(results) == 1
+    assert results[0].device_id == "dev1"
+    assert results[0].battery_percent == 85
+
+
+def test_blank_lines_before_csv_record_not_charged_to_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Blank rows skipped by DictReader must not count toward the next record's limit."""
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "200")
+    csv_path = tmp_path / "readings.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        f.write("deviceId,timestamp,batteryLevel,notes\n")
+        f.write("\n" * 100)
+        f.write('dev1,1700000000,85,"' + "X" * 150 + '"\n')
+
+    results = scan_device_health_from_file(csv_path, now_ts=10)
+    assert len(results) == 1
+    assert results[0].battery_percent == 85
+
+
+def test_open_binary_allows_relative_path_with_dotdot(tmp_path: Path):
+    """A path like data/../data/file is valid and must open."""
+    from bm.safe_io import open_binary
+
+    (tmp_path / "data").mkdir()
+    target = tmp_path / "data" / "f.ndjson"
+    target.write_bytes(b"{}\n")
+    with open_binary(tmp_path / "data" / ".." / "data" / "f.ndjson") as fh:
+        assert fh.read() == b"{}\n"
