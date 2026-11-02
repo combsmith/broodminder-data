@@ -172,6 +172,16 @@ BROODMINDER_BASE_URL=https://external-api.mybroodminder.com
 
 `.env` is git-ignored and never leaves your machine.
 
+Optional resource limits for reading local extract files and serving MCP queries (defaults shown):
+
+| Variable | Default | Limits |
+|---|---|---|
+| `BROODMINDER_MAX_LINE_BYTES` | `1048576` (1 MiB) | Longest NDJSON/CSV line read from `readings.ndjson(.gz)`, `notes.ndjson`, or a `--data` file |
+| `BROODMINDER_MAX_DOCUMENT_BYTES` | `134217728` (128 MiB) | Largest decompressed raw window (`raw/<hive>/*.json(.gz)`) |
+| `BROODMINDER_MAX_COVERAGE_DAYS` | `7305` (20 years) | Longest lookback an MCP tool or `LocalStore.ensure_coverage` accepts |
+
+Exceeding a limit fails with an error naming the file or interval and the variable to raise.
+
 ---
 
 ## Quickstart Usage

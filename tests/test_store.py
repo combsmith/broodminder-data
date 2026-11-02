@@ -364,3 +364,114 @@ def test_notes_from_raw_and_flattened_fallback(tmp_path):
          "m_weight": 42.0}) + "\n")
     rows = list(LocalStore(flat).iter_readings("h9"))
     assert rows[0]["m_weight"] == 42.0
+
+
+# --- resource limits (#228, #229) ------------------------------------------------
+
+def test_oversized_raw_window_document_rejected(tmp_path, monkeypatch):
+    import pytest
+    from bm.safe_io import InputLimitError
+
+    store = seed_store(tmp_path)
+    monkeypatch.setenv("BROODMINDER_MAX_DOCUMENT_BYTES", "4096")
+    with gzip.open(tmp_path / "raw" / "h1" / "1-2.readings.json.gz", "wt") as fh:
+        fh.write("[" + " " * 1_000_000 + "]")
+    with pytest.raises(InputLimitError, match="BROODMINDER_MAX_DOCUMENT_BYTES"):
+        list(store.iter_readings("h1"))
+
+
+def test_oversized_raw_notes_document_rejected(tmp_path, monkeypatch):
+    import pytest
+    from bm.safe_io import InputLimitError
+
+    store = seed_store(tmp_path)
+    monkeypatch.setenv("BROODMINDER_MAX_DOCUMENT_BYTES", "4096")
+    with gzip.open(tmp_path / "raw" / "h1" / "1-2.notes.json.gz", "wt") as fh:
+        fh.write("[" + " " * 1_000_000 + "]")
+    with pytest.raises(InputLimitError):
+        list(store.iter_notes("h1"))
+
+
+def test_overlong_flat_archive_line_rejected(tmp_path, monkeypatch):
+    import pytest
+    from bm.safe_io import InputLimitError
+
+    store = LocalStore(tmp_path)
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "1024")
+    with gzip.open(tmp_path / "readings.ndjson.gz", "wt") as fh:
+        fh.write(json.dumps({"hiveId": "h1", "deviceId": "d1", "timestamp": BASE}) + "\n")
+        fh.write(" " * 1_000_000 + "\n")
+    with pytest.raises(InputLimitError, match="BROODMINDER_MAX_LINE_BYTES"):
+        list(store.iter_readings())
+
+
+def test_overlong_notes_ndjson_line_rejected(tmp_path, monkeypatch):
+    import pytest
+    from bm.safe_io import InputLimitError
+
+    store = LocalStore(tmp_path)
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "1024")
+    (tmp_path / "notes.ndjson").write_text(
+        json.dumps({"hiveId": "h1", "id": "n1"}) + "\n" + "x" * 5000 + "\n"
+    )
+    with pytest.raises(InputLimitError):
+        list(store.iter_notes("h1"))
+
+
+def test_flat_archive_and_notes_within_limits_still_read(tmp_path, monkeypatch):
+    store = LocalStore(tmp_path)
+    monkeypatch.setenv("BROODMINDER_MAX_LINE_BYTES", "1024")
+    with gzip.open(tmp_path / "readings.ndjson.gz", "wt") as fh:
+        fh.write(json.dumps({"hiveId": "h1", "deviceId": "d1", "timestamp": BASE}) + "\n\nbad\n")
+    (tmp_path / "notes.ndjson").write_text(json.dumps({"hiveId": "h1", "id": "n1"}) + "\n")
+    assert len(list(store.iter_readings("h1"))) == 1
+    assert [n["id"] for n in store.iter_notes("h1")] == ["n1"]
+
+
+def test_unbounded_coverage_interval_rejected(tmp_path):
+    import pytest
+
+    store = seed_store(tmp_path)
+    fake = FakeClient()
+    huge = BASE - 10**9 * DAY  # ~5.5 million 180-day windows before the fix
+    for source in ("offline", "auto"):
+        with pytest.raises(ValueError, match="BROODMINDER_MAX_COVERAGE_DAYS"):
+            store.ensure_coverage(["h1"], huge, BASE + DAY, source=source, client=fake)
+    assert fake.calls == 0
+
+
+def test_coverage_limit_is_configurable(tmp_path, monkeypatch):
+    import pytest
+
+    store = seed_store(tmp_path)
+    monkeypatch.setenv("BROODMINDER_MAX_COVERAGE_DAYS", "10")
+    with pytest.raises(ValueError, match="10 days"):
+        store.ensure_coverage(["h1"], BASE - 30 * DAY, BASE + DAY, source="offline")
+    report = store.ensure_coverage(["h1"], BASE, BASE + DAY, source="offline")
+    assert report["stale"] is False
+
+
+def test_offline_gap_check_does_not_enumerate_windows(tmp_path, monkeypatch):
+    import bm.store as store_mod
+
+    def _boom(*_a, **_k):
+        raise AssertionError("offline coverage check must not enumerate windows")
+
+    monkeypatch.setattr(store_mod, "iter_windows", _boom)
+    store = seed_store(tmp_path)
+    # 19-year span with a prefix gap: stale, answered without building windows.
+    report = store.ensure_coverage(["h1"], BASE - 19 * 365 * DAY, BASE + DAY, source="offline")
+    assert report["stale"] is True
+    report = store.ensure_coverage(["h1"], BASE, BASE + DAY, source="offline")
+    assert report["stale"] is False
+
+
+def test_mcp_tool_days_bounded(tmp_path):
+    import pytest
+    from bm.mcp_server import hive_notes, telemetry_trends
+
+    store = seed_store(tmp_path)
+    with pytest.raises(ValueError, match="BROODMINDER_MAX_COVERAGE_DAYS"):
+        telemetry_trends(store, "h1", days=10**9, source="offline", now_ts=BASE)
+    with pytest.raises(ValueError, match="BROODMINDER_MAX_COVERAGE_DAYS"):
+        hive_notes(store, "h1", days=10**9, source="offline", now_ts=BASE)
