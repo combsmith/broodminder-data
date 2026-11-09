@@ -363,11 +363,17 @@ def main() -> int:
     ap.add_argument("--merge", action="store_true",
                     help="merge incremental raw windows into existing readings and notes outputs")
     ap.add_argument("--completed-only", action="store_true",
-                    help="skip raw hive dirs with no completed manifest entry (their metadata is unknown)")
+                    help="skip raw hive dirs with no completed manifest entry (their metadata is unknown) "
+                         "and, within known hives, skip window files not listed as completed in the manifest; "
+                         "requires manifest.json")
     args = ap.parse_args()
 
     if not RAW.exists() and not args.merge:
         print("no raw data yet; run extract_all.py first", file=sys.stderr)
+        return 1
+
+    if args.completed_only and not (OUT / "manifest.json").exists():
+        print("--completed-only requires manifest.json; run extract_all.py first", file=sys.stderr)
         return 1
 
     manifest = load_json(OUT / "manifest.json") if (OUT / "manifest.json").exists() else {}

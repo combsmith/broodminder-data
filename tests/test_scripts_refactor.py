@@ -648,3 +648,17 @@ def test_hive_meta_preserves_pipe_in_hive_id():
     }}
     meta = flatten.hive_meta(manifest)
     assert list(meta) == ["hive|with|pipe"]
+
+
+def test_flatten_completed_only_requires_manifest(tmp_path, monkeypatch, capsys):
+    out = tmp_path / "extract"
+    (out / "raw").mkdir(parents=True)
+    existing = out / "notes.ndjson"
+    existing.write_text('{"hiveId": "h1"}\n')
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--completed-only"])
+    assert flatten.main() == 1
+    assert "manifest.json" in capsys.readouterr().err
+    assert existing.read_text() == '{"hiveId": "h1"}\n'
+    assert not (out / "readings.ndjson.gz").exists()
