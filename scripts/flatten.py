@@ -147,10 +147,12 @@ def accumulate_coverage(coverage: defaultdict, row: dict) -> None:
 
 
 def _has_content(path: Path) -> bool:
+    """True if path exists and is non-empty."""
     return path.exists() and path.stat().st_size > 0
 
 
 def _ensure_newline(line: str) -> str:
+    """Return line with a trailing newline."""
     return line if line.endswith("\n") else line + "\n"
 
 
@@ -290,6 +292,7 @@ def _stream_existing_readings(sink: _ReadingsSink, target_ndjson: Path, seen: di
 
 def _stream_raw_readings(sink: _ReadingsSink, meta: dict, seen: dict, merge: bool,
                          completed_only: bool = False, windows: dict | None = None) -> None:
+    """Stream deduped rows from the raw tree into sink."""
     for hdir in sorted(RAW.iterdir()):
         if not hdir.is_dir():
             continue
@@ -358,6 +361,7 @@ def _write_notes_atomic(meta: dict, merge: bool, target_notes: Path, completed_o
 
 
 def main() -> int:
+    """CLI entry point; returns the process exit code."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--no-csv", action="store_true", help="skip the (large) CSV output")
     ap.add_argument("--merge", action="store_true",
