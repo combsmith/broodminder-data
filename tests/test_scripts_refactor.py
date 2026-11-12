@@ -875,3 +875,36 @@ def test_preserve_prune_backup_keeps_each_prune_under_unique_name(tmp_path):
     assert (tmp_path / "notes.ndjson.bak").read_text() == "v1\n"
     extra = [p for p in tmp_path.glob("notes.ndjson.bak.*")]
     assert len(extra) == 1 and extra[0].read_text() == "v2\n"
+
+
+def test_flatten_completed_only_raw_non_numeric_timestamp_and_metric_discovery_parity(
+    tmp_path, monkeypatch
+):
+    import csv
+
+    out = tmp_path / "extract"
+    hdir = out / "raw" / "h1"
+    hdir.mkdir(parents=True)
+    (hdir / "10-20.readings.json").write_text(json.dumps([{"positionID": "p", "readings": [
+        {"deviceId": "d", "timestamp": 15, "readings": {"temperature": 80.0}},
+        {"deviceId": "d", "timestamp": 20, "readings": {"boundaryOnly": 99.0}},
+        {"deviceId": "d", "timestamp": "bad-ts", "readings": {"corruptOnly": 1.0}},
+    ]}]))
+    (hdir / "10-20.notes.json").write_text(json.dumps({"notes": [
+        "not-a-dict",
+        {"id": "ok", "timestamp": 15},
+    ]}))
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only"])
+    assert flatten.main() == 0
+    with gzip.open(out / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        assert [json.loads(line)["timestamp"] for line in fh] == [15]
+    with gzip.open(out / "readings.csv.gz", "rt", encoding="utf-8", newline="") as fh:
+        header = next(csv.reader(fh))
+    assert "m_boundaryOnly" not in header
+    assert "m_corruptOnly" not in header
+    assert [json.loads(line)["id"] for line in (out / "notes.ndjson").read_text().splitlines()] == ["ok"]

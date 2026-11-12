@@ -162,16 +162,35 @@ def iter_readings(hdir: Path, allowed: set | None = None):
                 yield pid, r
 
 
-def discover_metric_keys(raw: Path, only_hives: set | None = None, windows: dict | None = None) -> set[str]:
+def _hive_metric_keys(
+    hdir: Path, allowed: set | None, hive_iv: list[tuple[int, int]] | None
+) -> set[str]:
+    """Collect metric keys for one hive dir within allowed windows and intervals."""
+    keys: set[str] = set()
+    for _pid, r in iter_readings(hdir, allowed):
+        if hive_iv is not None and not _ts_in_intervals(r.get("timestamp"), hive_iv):
+            continue
+        keys.update((r.get("readings") or {}).keys())
+    return keys
+
+
+def discover_metric_keys(
+    raw: Path,
+    only_hives: set | None = None,
+    windows: dict | None = None,
+    intervals: dict[str, list[tuple[int, int]]] | None = None,
+) -> set[str]:
     """Pass 1: scan every reading for its metric names so the CSV header is
     stable and fixed before any rows are streamed."""
     metric_keys: set[str] = set()
     for hdir in sorted(raw.iterdir()):
-        if not hdir.is_dir() or (only_hives is not None and hdir.name not in only_hives):
+        if not hdir.is_dir():
+            continue
+        if only_hives is not None and hdir.name not in only_hives:
             continue
         allowed = windows.get(hdir.name, set()) if windows is not None else None
-        for _pid, r in iter_readings(hdir, allowed):
-            metric_keys.update((r.get("readings") or {}).keys())
+        hive_iv = intervals.get(hdir.name, []) if intervals is not None else None
+        metric_keys.update(_hive_metric_keys(hdir, allowed, hive_iv))
     return metric_keys
 
 
@@ -191,14 +210,23 @@ def build_row(hid: str, m: dict, pid: Any, r: dict) -> dict:
     }
 
 
-def iter_hive_rows(hdir: Path, m: dict, seen: set | None = None, allowed: set | None = None) -> Any:
+def iter_hive_rows(
+    hdir: Path,
+    m: dict,
+    seen: set | None = None,
+    allowed: set | None = None,
+    hive_intervals: list[tuple[int, int]] | None = None,
+) -> Any:
     """Yield deduped rows for one hive dir. Overlapping/re-fetched windows can
     repeat the same (position, device, timestamp); dedupe within the hive
     (reset per hive to bound memory)."""
     hid = hdir.name
     hive_seen = seen if seen is not None else set()
     for pid, r in iter_readings(hdir, allowed):
-        dk = (pid, r.get("deviceId"), r.get("timestamp"))
+        ts = r.get("timestamp")
+        if hive_intervals is not None and not _ts_in_intervals(ts, hive_intervals):
+            continue
+        dk = (pid, r.get("deviceId"), ts)
         if dk in hive_seen:
             continue
         hive_seen.add(dk)
@@ -448,8 +476,14 @@ def _collect_metric_keys(
     """Pass 1: discover metric keys, unioned with KNOWN_METRIC_KEYS for fixed header stability."""
     metric_keys: set[str] = set(KNOWN_METRIC_KEYS)
     if RAW.exists() and not args.no_csv:
-        metric_keys.update(discover_metric_keys(RAW, set(meta) if args.completed_only else None,
-                                                windows if args.completed_only else None))
+        metric_keys.update(
+            discover_metric_keys(
+                RAW,
+                set(meta) if args.completed_only else None,
+                windows if args.completed_only else None,
+                intervals if args.completed_only else None,
+            )
+        )
     # In merge mode, include any existing m_* metrics already in the archive
     # so historical fields remain in the rebuilt CSV even if raw files were purged.
     if args.merge and _has_content(target_ndjson):
@@ -511,9 +545,8 @@ def _stream_raw_readings(sink: _ReadingsSink, meta: dict, seen: dict, merge: boo
             continue
         hive_seen = seen[hdir.name] if merge else None
         allowed = windows.get(hdir.name, set()) if completed_only and windows is not None else None
-        for row in iter_hive_rows(hdir, meta.get(hdir.name, {}), hive_seen, allowed):
-            if completed_only and not _row_in_completed(row, intervals if intervals is not None else {}):
-                continue
+        hive_iv = (intervals or {}).get(hdir.name, []) if completed_only else None
+        for row in iter_hive_rows(hdir, meta.get(hdir.name, {}), hive_seen, allowed, hive_iv):
             sink.emit(json.dumps(row) + "\n", row)
 
 
