@@ -787,3 +787,54 @@ def test_flatten_merge_completed_only_preserves_purged_timestamped_note_and_filt
     assert all(n["hiveName"] == "H1" for n in notes)
 
 
+def test_flatten_merge_completed_only_preserves_non_clobbering_bak_and_logs_pruned_counts(
+    tmp_path, monkeypatch, capsys
+):
+    out = tmp_path / "extract"
+    out.mkdir(parents=True)
+    orig_rows = [
+        {"hiveId": "h1", "positionID": "p1", "deviceId": "d1", "timestamp": 15, "m_temperature": 80.0},
+        {"hiveId": "h1", "positionID": "p1", "deviceId": "d1", "timestamp": 25, "m_temperature": 81.0},
+        {"hiveId": "h2", "positionID": "p1", "deviceId": "d2", "timestamp": 15, "m_temperature": 82.0},
+    ]
+    with gzip.open(out / "readings.ndjson.gz", "wt", encoding="utf-8") as fh:
+        for r in orig_rows:
+            fh.write(json.dumps(r) + "\n")
+    with gzip.open(out / "readings.csv.gz", "wt", encoding="utf-8") as fh:
+        fh.write("legacy-csv-sentinel\n")
+    orig_notes_text = (
+        json.dumps({"hiveId": "h1", "id": "n-keep", "timestamp": 15}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-drop", "timestamp": 25}) + "\n"
+    )
+    (out / "notes.ndjson").write_text(orig_notes_text)
+    (out / "coverage.json").write_text('{"legacy": true}\n')
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only"])
+    assert flatten.main() == 0
+    stdout1 = capsys.readouterr().out
+    assert "pruned archive: 2 readings, 1 notes (.bak preserved)" in stdout1
+
+    with gzip.open(out / "readings.ndjson.gz.bak", "rt", encoding="utf-8") as fh:
+        bak_rows = [json.loads(line) for line in fh]
+    assert bak_rows == orig_rows
+    with gzip.open(out / "readings.csv.gz.bak", "rt", encoding="utf-8") as fh:
+        assert fh.read() == "legacy-csv-sentinel\n"
+    assert (out / "notes.ndjson.bak").read_text() == orig_notes_text
+    assert (out / "coverage.json.bak").read_text() == '{"legacy": true}\n'
+
+    # Subsequent prune must NOT overwrite existing .bak files; steady-state run logs no prune
+    assert flatten.main() == 0
+    stdout2 = capsys.readouterr().out
+    assert "pruned archive:" not in stdout2
+    with gzip.open(out / "readings.ndjson.gz", "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(orig_rows[0]) + "\n")
+        fh.write(json.dumps(orig_rows[1]) + "\n")
+    assert flatten.main() == 0
+    with gzip.open(out / "readings.ndjson.gz.bak", "rt", encoding="utf-8") as fh:
+        assert [json.loads(line) for line in fh] == orig_rows
+    assert (out / "coverage.json.bak").read_text() == '{"legacy": true}\n'

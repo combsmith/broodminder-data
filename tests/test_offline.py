@@ -718,9 +718,6 @@ def test_cron_sync_exit_code_precedence_and_manifest_guard(tmp_path):
     import stat
     import subprocess
 
-    if shutil.which("bash") is None:
-        pytest.skip("bash not available")
-
     repo = tmp_path / "repo"
     scripts_dir = repo / "scripts"
     venv_bin = repo / ".venv" / "bin"

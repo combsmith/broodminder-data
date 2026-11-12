@@ -20,6 +20,7 @@ import io
 import json
 import math
 import os
+import shutil
 import sys
 import zlib
 from bisect import bisect_right
@@ -302,6 +303,15 @@ def _enrich_note_meta(line: str, note: dict, meta: dict) -> str:
     return _ensure_newline(line)
 
 
+def _preserve_prune_backup(target: Path, pruned: int) -> None:
+    """Preserve a non-clobbering .bak copy of target before pruning archived records."""
+    if pruned <= 0 or not _has_content(target):
+        return
+    bak = target.with_name(target.name + ".bak")
+    if not bak.exists():
+        shutil.copy2(target, bak)
+
+
 def _copy_existing_notes(
     fh: TextIO,
     existing_target: Path,
@@ -309,20 +319,22 @@ def _copy_existing_notes(
     meta: dict | None = None,
     intervals: dict[str, list[tuple[int, int]]] | None = None,
     excluded_keys: set[tuple] | None = None,
-) -> int:
-    """Copy retained notes from the prior archive into fh, recording each dedupe key."""
+) -> tuple[int, int]:
+    """Copy retained notes from the prior archive into fh, returning (kept, pruned)."""
     n_notes = 0
+    pruned_notes = 0
     with existing_target.open("r", encoding="utf-8") as in_notes:
         for line in in_notes:
             if not line.strip():
                 continue
             note = json.loads(line)
             if not _note_in_completed(note, intervals, excluded_keys):
+                pruned_notes += 1
                 continue
             seen_notes.add(_note_key(note.get("hiveId"), note))
             fh.write(_enrich_note_meta(line, note, meta or {}))
             n_notes += 1
-    return n_notes
+    return n_notes, pruned_notes
 
 
 def _iter_raw_notes(raw: Path, meta: dict | None = None, completed_only: bool = False,
@@ -350,9 +362,11 @@ def write_notes(
     completed_only: bool = False,
     windows: dict | None = None,
     intervals: dict[str, list[tuple[int, int]]] | None = None,
+    stats_out: dict[str, int] | None = None,
 ) -> int:
     """Notes are small — flatten them to plain ndjson. Returns the row count."""
     n_notes = 0
+    pruned_notes = 0
     seen_notes: set = set()
     active_intervals: dict[str, list[tuple[int, int]]] | None = None
     excluded_keys: set[tuple] | None = None
@@ -362,9 +376,10 @@ def write_notes(
 
     with path.open("w", encoding="utf-8") as fh:
         if merge and existing_target and _has_content(existing_target):
-            n_notes += _copy_existing_notes(
+            kept, pruned_notes = _copy_existing_notes(
                 fh, existing_target, seen_notes, meta, active_intervals, excluded_keys
             )
+            n_notes += kept
 
         if raw.exists():
             for hid, n in _iter_raw_notes(raw, meta, completed_only, windows):
@@ -375,6 +390,8 @@ def write_notes(
                 hive_name = meta.get(hid, {}).get("hiveName")
                 fh.write(json.dumps({"hiveId": hid, "hiveName": hive_name, **n}) + "\n")
                 n_notes += 1
+    if stats_out is not None:
+        stats_out["pruned_notes"] = pruned_notes
     return n_notes
 
 
@@ -443,6 +460,7 @@ class _ReadingsSink:
         self.csv_writer = csv_writer
         self.cols = cols
         self.n_rows = 0
+        self.pruned_rows = 0
         self.coverage = defaultdict(lambda: {"rows": 0, "min_ts": None, "max_ts": None,
                                              "devices": set(), "positions": set()})
 
@@ -468,6 +486,7 @@ def _stream_existing_readings(
                 continue
             row = json.loads(line)
             if not _row_in_completed(row, intervals):
+                sink.pruned_rows += 1
                 continue
             out_line, row = _enrich_row_meta(line, row, meta or {})
             seen[row.get("hiveId")].add((row.get("positionID"), row.get("deviceId"), row.get("timestamp")))
@@ -528,8 +547,10 @@ def _write_readings(
             tmp_csv.unlink(missing_ok=True)
 
     if tmp_ndjson.exists():
+        _preserve_prune_backup(target_ndjson, sink.pruned_rows)
         tmp_ndjson.replace(target_ndjson)
     if not args.no_csv and tmp_csv.exists():
+        _preserve_prune_backup(target_csv, sink.pruned_rows)
         tmp_csv.replace(target_csv)
     return sink
 
@@ -541,23 +562,27 @@ def _write_notes_atomic(
     completed_only: bool = False,
     windows: dict | None = None,
     intervals: dict[str, list[tuple[int, int]]] | None = None,
-) -> int:
+) -> tuple[int, int]:
     """Write notes to a tmp file, then atomically replace the target."""
     tmp_notes = OUT / f"notes.ndjson.tmp.{os.getpid()}"
+    notes_stats: dict[str, int] = {}
     notes_success = False
     try:
         n_notes = write_notes(
             tmp_notes, meta, raw=RAW, merge=merge, existing_target=target_notes,
             completed_only=completed_only, windows=windows, intervals=intervals,
+            stats_out=notes_stats,
         )
         notes_success = True
     finally:
         if not notes_success and tmp_notes.exists():
             tmp_notes.unlink(missing_ok=True)
 
+    pruned_notes = notes_stats.get("pruned_notes", 0)
     if tmp_notes.exists():
+        _preserve_prune_backup(target_notes, pruned_notes)
         tmp_notes.replace(target_notes)
-    return n_notes
+    return n_notes, pruned_notes
 
 
 def main() -> int:
@@ -569,8 +594,8 @@ def main() -> int:
     ap.add_argument("--completed-only", action="store_true",
                     help="skip raw hive dirs with no completed manifest entry (their metadata is unknown), "
                          "skip window files within known hives not listed as completed in the manifest, "
-                         "and under --merge drop previously archived rows/notes outside completed windows; "
-                         "requires manifest.json")
+                         "and under --merge prune archived rows/notes outside completed windows "
+                         "(preserving non-clobbering .bak backups); requires manifest.json")
     args = ap.parse_args()
 
     if not RAW.exists() and not args.merge:
@@ -594,13 +619,19 @@ def main() -> int:
     metric_cols = [f"m_{k}" for k in sorted(metric_keys)]
 
     sink = _write_readings(args, meta, metric_cols, target_ndjson, target_csv, windows, intervals)
-    n_notes = _write_notes_atomic(meta, args.merge, target_notes, args.completed_only, windows, intervals)
+    n_notes, pruned_notes = _write_notes_atomic(
+        meta, args.merge, target_notes, args.completed_only, windows, intervals
+    )
 
     cov_out = build_coverage(sink.coverage, meta)
-    (OUT / "coverage.json").write_text(json.dumps(cov_out, indent=2))
+    target_cov = OUT / "coverage.json"
+    _preserve_prune_backup(target_cov, sink.pruned_rows)
+    target_cov.write_text(json.dumps(cov_out, indent=2))
 
     print(f"readings rows : {sink.n_rows}")
     print(f"notes         : {n_notes}")
+    if sink.pruned_rows or pruned_notes:
+        print(f"pruned archive: {sink.pruned_rows} readings, {pruned_notes} notes (.bak preserved)")
     print(f"metrics seen  : {sorted(metric_keys)}")
     print(f"hives w/ data : {len(cov_out)}")
     outs = "readings.ndjson.gz, " + ("" if args.no_csv else "readings.csv.gz, ") + "notes.ndjson, coverage.json"
