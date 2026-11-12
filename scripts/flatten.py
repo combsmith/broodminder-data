@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "extract"
 RAW = OUT / "raw"
 
-_READ_ERRORS = (OSError, EOFError, zlib.error, json.JSONDecodeError)
+_READ_ERRORS = (OSError, EOFError, UnicodeDecodeError, zlib.error, json.JSONDecodeError)
 
 
 def load_json(path: Path) -> Any:
@@ -51,6 +51,8 @@ def _iter_completed_entries(manifest: dict) -> Iterator[tuple[str, int, int, dic
         try:
             start, end = int(parts[1]), int(parts[2])
         except ValueError:
+            continue
+        if start >= end:
             continue
         record = rec if isinstance(rec, dict) else {}
         yield parts[0], start, end, record
@@ -259,11 +261,9 @@ def _note_in_completed(
     hid = note.get("hiveId")
     if not isinstance(hid, str) or hid not in intervals:
         return False
-    if excluded_keys and _note_key(hid, note) in excluded_keys:
-        return False
     ts = note.get("timestamp")
     if ts is None:
-        return True
+        return not (excluded_keys and _note_key(hid, note) in excluded_keys)
     return _ts_in_intervals(ts, intervals[hid])
 
 

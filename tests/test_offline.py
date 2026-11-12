@@ -620,9 +620,9 @@ def test_flatten_merge_completed_only_filters_archived_incomplete_windows(tmp_pa
     assert fl.main() == 0
 
     with gzip.open(out_dir / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
-        pass2_rows = {
-            (r["hiveId"], r["timestamp"]): r for r in (json.loads(line) for line in fh)
-        }
+        pass2_list = [json.loads(line) for line in fh]
+    pass2_rows = {(r["hiveId"], r["timestamp"]): r for r in pass2_list}
+    assert len(pass2_list) == len(pass2_rows), "duplicate readings in merged output"
     assert set(pass2_rows) == {("h1", 50), ("h1", 150), ("h_new", 120)}
     assert pass2_rows[("h1", 150)]["m_temperature"] == 75.5
     assert pass2_rows[("h_new", 120)]["hiveName"] == "Hive New"
