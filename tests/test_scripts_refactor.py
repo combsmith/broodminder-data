@@ -671,15 +671,27 @@ def test_manifest_helpers_skip_malformed_keys_consistently():
             "two|parts": {"apiaryName": "Bad", "apiaryId": "B2", "hiveName": "Bad2"},
             "|10|20": {"apiaryName": "Bad", "apiaryId": "B3", "hiveName": "EmptyHive"},
             "h1|bad|20": {"apiaryName": "Bad", "apiaryId": "B4", "hiveName": "BadTs"},
+            "h1|20|20": {"apiaryName": "Bad", "apiaryId": "B5", "hiveName": "ZeroLen"},
+            "h1|30|10": {"apiaryName": "Bad", "apiaryId": "B6", "hiveName": "Inverted"},
             "h1|10|20": {"reading_rows": 5},
-            "h1|20|30": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "Hive-1"},
+            "h1|15|25": {"reading_rows": 3},
+            "h1|25|30": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "Hive-1"},
+            "h1|50|60": {"reading_rows": 2},
         }
     }
     meta = flatten.hive_meta(manifest)
     assert list(meta) == ["h1"]
     assert meta["h1"] == {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "Hive-1"}
-    assert flatten.hive_windows(manifest) == {"h1": {"10-20", "20-30"}}
-    assert flatten.hive_intervals(manifest) == {"h1": [(10, 20), (20, 30)]}
+    assert flatten.hive_windows(manifest) == {"h1": {"10-20", "15-25", "25-30", "50-60"}}
+    assert flatten.hive_intervals(manifest) == {"h1": [(10, 30), (50, 60)]}
+    spans = flatten.hive_intervals(manifest)["h1"]
+    assert flatten._ts_in_intervals(10, spans)
+    assert flatten._ts_in_intervals(22, spans)
+    assert not flatten._ts_in_intervals(30, spans)
+    assert not flatten._ts_in_intervals(40, spans)
+    assert flatten._ts_in_intervals(55, spans)
+    assert not flatten._ts_in_intervals(float("nan"), spans)
+    assert not flatten._ts_in_intervals(15, [])
 
 
 def test_flatten_completed_only_handles_gz_notes(tmp_path, monkeypatch):
@@ -737,4 +749,41 @@ def test_flatten_merge_completed_only_without_raw_dir_and_non_numeric_ts(tmp_pat
     notes = [json.loads(line) for line in (out / "notes.ndjson").read_text().splitlines()]
     assert [n["id"] for n in notes] == ["n1"]
     assert notes[0]["hiveName"] == "H1"
+
+
+def test_flatten_merge_completed_only_preserves_purged_timestamped_note_and_filters_created_only(
+    tmp_path, monkeypatch
+):
+    out = tmp_path / "extract"
+    hdir = out / "raw" / "h1"
+    hdir.mkdir(parents=True)
+    # Completed 10-20 raw files were purged; corrupt UTF-8 in unmanifested raw file must not abort
+    (hdir / "25-35.notes.json").write_bytes(b"\xff\xfeinvalid-utf8")
+    # Overlapping unmanifested 10-30 raw notes remain on disk after interrupted run
+    (hdir / "10-30.notes.json").write_text(json.dumps({
+        "notes": [
+            {"id": "n-completed", "timestamp": 15, "description": "keep me"},
+            {"id": "n-incomplete", "timestamp": 25, "description": "drop me"},
+            {"id": "n-notime-unmanifested", "description": "drop timeless unmanifested"},
+        ]
+    }))
+    (out / "notes.ndjson").write_text(
+        json.dumps({"hiveId": "h1", "id": "n-completed", "timestamp": 15}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-incomplete", "timestamp": 25}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-created-ok", "created": 18}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-created-outside", "created": 28}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-notime-unmanifested", "description": "drop timeless unmanifested"}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-notime-purged", "description": "keep timeless archived"}) + "\n"
+    )
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert flatten.main() == 0
+    notes = [json.loads(line) for line in (out / "notes.ndjson").read_text().splitlines()]
+    assert [n["id"] for n in notes] == ["n-completed", "n-created-ok", "n-notime-purged"]
+    assert all(n["hiveName"] == "H1" for n in notes)
+
 

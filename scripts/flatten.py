@@ -18,9 +18,11 @@ import csv
 import gzip
 import io
 import json
+import math
 import os
 import sys
 import zlib
+from bisect import bisect_right
 from collections import defaultdict
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -77,21 +79,33 @@ def hive_windows(manifest: dict) -> dict[str, set[str]]:
     return wins
 
 
+def _coalesce_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Merge sorted or unsorted (start, end) intervals into disjoint sorted spans."""
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def hive_intervals(manifest: dict) -> dict[str, list[tuple[int, int]]]:
-    """Map hive ID -> sorted list of completed (start, end) epoch intervals."""
-    intervals: dict[str, list[tuple[int, int]]] = {}
+    """Map hive ID -> sorted, coalesced list of completed (start, end) epoch intervals."""
+    raw_spans: dict[str, list[tuple[int, int]]] = {}
     for hid, start, end, _rec in _iter_completed_entries(manifest):
-        intervals.setdefault(hid, []).append((start, end))
-    for spans in intervals.values():
-        spans.sort()
-    return intervals
+        raw_spans.setdefault(hid, []).append((start, end))
+    return {hid: _coalesce_spans(spans) for hid, spans in raw_spans.items()}
 
 
 def _ts_in_intervals(ts: Any, spans: list[tuple[int, int]]) -> bool:
-    """Return True when numeric epoch timestamp ts falls inside any [start, end) span."""
-    if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+    """Return True when numeric epoch timestamp ts falls inside any coalesced [start, end) span."""
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not spans:
         return False
-    return any(start <= ts < end for start, end in spans)
+    if isinstance(ts, float) and math.isnan(ts):
+        return False
+    idx = bisect_right(spans, ts, key=lambda s: s[0]) - 1
+    return idx >= 0 and spans[idx][0] <= ts < spans[idx][1]
 
 
 def _row_in_completed(row: dict, intervals: dict[str, list[tuple[int, int]]] | None) -> bool:
@@ -230,15 +244,26 @@ def _load_note_items(path: Path) -> list[dict]:
     return [n for n in (items or []) if isinstance(n, dict)]
 
 
+def _note_epoch(note: dict) -> Any:
+    """Return the note's window-comparable epoch (timestamp, falling back to created)."""
+    ts = note.get("timestamp")
+    return note.get("created") if ts is None else ts
+
+
 def _hive_note_keys(hdir: Path, allowed: set[str], include_completed: bool) -> set[tuple]:
-    """Collect _note_key tuples from either completed or unmanifested note files in hdir."""
+    """Collect undated _note_key tuples from completed or unmanifested note files in hdir."""
     all_files = sorted(list(hdir.glob("*.notes.json")) + list(hdir.glob("*.notes.json.gz")))
     selected = [f for f in all_files if (_window_ok(f, allowed) is include_completed)]
-    return {_note_key(hdir.name, n) for f in selected for n in _load_note_items(f)}
+    return {
+        _note_key(hdir.name, n)
+        for f in selected
+        for n in _load_note_items(f)
+        if _note_epoch(n) is None
+    }
 
 
 def _unmanifested_raw_note_keys(raw: Path, windows: dict[str, set[str]]) -> set[tuple]:
-    """Note keys present only in unmanifested raw files (for timestamp-less notes)."""
+    """Note keys present only in unmanifested raw files (for undated notes)."""
     if not raw.exists():
         return set()
     excluded: set[tuple] = set()
@@ -261,7 +286,7 @@ def _note_in_completed(
     hid = note.get("hiveId")
     if not isinstance(hid, str) or hid not in intervals:
         return False
-    ts = note.get("timestamp")
+    ts = _note_epoch(note)
     if ts is None:
         return not (excluded_keys and _note_key(hid, note) in excluded_keys)
     return _ts_in_intervals(ts, intervals[hid])
