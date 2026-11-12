@@ -308,8 +308,11 @@ def _preserve_prune_backup(target: Path, pruned: int) -> None:
     if pruned <= 0 or not _has_content(target):
         return
     bak = target.with_name(target.name + ".bak")
-    if not bak.exists():
-        shutil.copy2(target, bak)
+    if bak.exists():
+        # Never clobber an earlier backup: keep each prune's pre-prune copy under a unique name.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        bak = target.with_name(f"{target.name}.bak.{stamp}")
+    shutil.copy2(target, bak)
 
 
 def _copy_existing_notes(
@@ -383,6 +386,10 @@ def write_notes(
 
         if raw.exists():
             for hid, n in _iter_raw_notes(raw, meta, completed_only, windows):
+                if not isinstance(n, dict):
+                    continue
+                if not _note_in_completed({"hiveId": hid, **n}, active_intervals, excluded_keys):
+                    continue
                 nk = _note_key(hid, n)
                 if nk in seen_notes:
                     continue
@@ -494,7 +501,8 @@ def _stream_existing_readings(
 
 
 def _stream_raw_readings(sink: _ReadingsSink, meta: dict, seen: dict, merge: bool,
-                         completed_only: bool = False, windows: dict | None = None) -> None:
+                         completed_only: bool = False, windows: dict | None = None,
+                         intervals: dict[str, list[tuple[int, int]]] | None = None) -> None:
     """Stream deduped rows from the raw tree into sink."""
     for hdir in sorted(RAW.iterdir()):
         if not hdir.is_dir():
@@ -504,6 +512,8 @@ def _stream_raw_readings(sink: _ReadingsSink, meta: dict, seen: dict, merge: boo
         hive_seen = seen[hdir.name] if merge else None
         allowed = windows.get(hdir.name, set()) if completed_only and windows is not None else None
         for row in iter_hive_rows(hdir, meta.get(hdir.name, {}), hive_seen, allowed):
+            if completed_only and not _row_in_completed(row, intervals if intervals is not None else {}):
+                continue
             sink.emit(json.dumps(row) + "\n", row)
 
 
@@ -536,7 +546,7 @@ def _write_readings(
         if args.merge and _has_content(target_ndjson):
             _stream_existing_readings(sink, target_ndjson, seen, meta, active_intervals)
         if RAW.exists():
-            _stream_raw_readings(sink, meta, seen, args.merge, args.completed_only, windows)
+            _stream_raw_readings(sink, meta, seen, args.merge, args.completed_only, windows, intervals)
         readings_success = True
     finally:
         ndjson_fh.close()

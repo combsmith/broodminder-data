@@ -838,3 +838,40 @@ def test_flatten_merge_completed_only_preserves_non_clobbering_bak_and_logs_prun
     with gzip.open(out / "readings.ndjson.gz.bak", "rt", encoding="utf-8") as fh:
         assert [json.loads(line) for line in fh] == orig_rows
     assert (out / "coverage.json.bak").read_text() == '{"legacy": true}\n'
+
+
+def test_flatten_completed_only_filters_raw_rows_and_notes_by_interval(tmp_path, monkeypatch):
+    out = tmp_path / "extract"
+    hdir = out / "raw" / "h1"
+    hdir.mkdir(parents=True)
+    (hdir / "10-20.readings.json").write_text(json.dumps([{"positionID": "p", "readings": [
+        {"deviceId": "d", "timestamp": 15, "readings": {"temperature": 80.0}},
+        {"deviceId": "d", "timestamp": 20, "readings": {"temperature": 81.0}},  # == end, excluded
+    ]}]))
+    (hdir / "10-20.notes.json").write_text(json.dumps({"notes": [
+        {"id": "in", "created": 12},
+        {"id": "before-start", "created": 5},
+        {"id": "bad-ts", "timestamp": "x"},
+    ]}))
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert flatten.main() == 0
+    with gzip.open(out / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        assert [json.loads(line)["timestamp"] for line in fh] == [15]
+    notes = [json.loads(line) for line in (out / "notes.ndjson").read_text().splitlines()]
+    assert [n["id"] for n in notes] == ["in"]
+
+
+def test_preserve_prune_backup_keeps_each_prune_under_unique_name(tmp_path):
+    target = tmp_path / "notes.ndjson"
+    target.write_text("v1\n")
+    flatten._preserve_prune_backup(target, 1)
+    target.write_text("v2\n")
+    flatten._preserve_prune_backup(target, 1)
+    assert (tmp_path / "notes.ndjson.bak").read_text() == "v1\n"
+    extra = [p for p in tmp_path.glob("notes.ndjson.bak.*")]
+    assert len(extra) == 1 and extra[0].read_text() == "v2\n"
