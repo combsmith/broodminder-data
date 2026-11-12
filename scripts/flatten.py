@@ -18,69 +18,183 @@ import csv
 import gzip
 import io
 import json
+import math
 import os
+import shutil
 import sys
+import zlib
+from bisect import bisect_right
 from collections import defaultdict
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, TextIO
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "data" / "extract"
 RAW = OUT / "raw"
 
+_READ_ERRORS = (OSError, EOFError, UnicodeDecodeError, zlib.error, json.JSONDecodeError)
 
-def load_json(path: Path):
+
+def load_json(path: Path) -> Any:
+    """Load JSON from a file, handling gzipped (.gz) files transparently."""
     if path.suffix == ".gz":
         with gzip.open(path, "rt", encoding="utf-8") as fh:
             return json.load(fh)
     return json.loads(path.read_text())
 
 
-def hive_meta(manifest: dict) -> dict:
-    meta = {}
-    for key, rec in manifest.get("completed", {}).items():
-        hid = key.split("|", 1)[0]
-        meta.setdefault(hid, {"apiaryName": rec.get("apiaryName"),
-                              "apiaryId": rec.get("apiaryId"),
-                              "hiveName": rec.get("hiveName")})
+def _iter_completed_entries(manifest: dict) -> Iterator[tuple[str, int, int, dict[str, Any]]]:
+    """Yield (hive_id, start, end, record) for well-formed completed manifest entries."""
+    for key, rec in (manifest.get("completed") or {}).items():
+        parts = key.rsplit("|", 2)
+        if len(parts) != 3 or not parts[0]:
+            continue
+        try:
+            start, end = int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        if start >= end:
+            continue
+        record = rec if isinstance(rec, dict) else {}
+        yield parts[0], start, end, record
+
+
+def hive_meta(manifest: dict) -> dict[str, dict[str, Any]]:
+    """Extract hive metadata (name, apiaryId, apiaryName) from completed manifest entries."""
+    meta: dict[str, dict[str, Any]] = {}
+    for hid, _start, _end, rec in _iter_completed_entries(manifest):
+        entry = meta.setdefault(hid, {"apiaryName": None, "apiaryId": None, "hiveName": None})
+        for field in ("apiaryName", "apiaryId", "hiveName"):
+            if entry[field] is None and rec.get(field) is not None:
+                entry[field] = rec[field]
     return meta
 
 
-def iter_reading_files(hdir: Path):
-    """All readings windows for a hive, gz or plain."""
-    yield from sorted(list(hdir.glob("*.readings.json")) + list(hdir.glob("*.readings.json.gz")))
+def hive_windows(manifest: dict) -> dict[str, set[str]]:
+    """Map hive ID -> set of completed '<start>-<end>' window stems."""
+    wins: dict[str, set[str]] = {}
+    for hid, start, end, _rec in _iter_completed_entries(manifest):
+        wins.setdefault(hid, set()).add(f"{start}-{end}")
+    return wins
 
 
-def iter_note_files(hdir: Path):
-    yield from sorted(list(hdir.glob("*.notes.json")) + list(hdir.glob("*.notes.json.gz")))
+def _coalesce_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Merge sorted or unsorted (start, end) intervals into disjoint sorted spans."""
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def hive_intervals(manifest: dict) -> dict[str, list[tuple[int, int]]]:
+    """Map hive ID -> sorted, coalesced list of completed (start, end) epoch intervals."""
+    raw_spans: dict[str, list[tuple[int, int]]] = {}
+    for hid, start, end, _rec in _iter_completed_entries(manifest):
+        raw_spans.setdefault(hid, []).append((start, end))
+    return {hid: _coalesce_spans(spans) for hid, spans in raw_spans.items()}
+
+
+def _ts_in_intervals(ts: Any, spans: list[tuple[int, int]]) -> bool:
+    """Return True when numeric epoch timestamp ts falls inside any coalesced [start, end) span."""
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not spans:
+        return False
+    if isinstance(ts, float) and math.isnan(ts):
+        return False
+    idx = bisect_right(spans, ts, key=lambda s: s[0]) - 1
+    return idx >= 0 and spans[idx][0] <= ts < spans[idx][1]
+
+
+def _row_in_completed(row: dict, intervals: dict[str, list[tuple[int, int]]] | None) -> bool:
+    """Return True if interval filtering is disabled or row falls in a completed window."""
+    if intervals is None:
+        return True
+    hid = row.get("hiveId")
+    if not isinstance(hid, str) or hid not in intervals:
+        return False
+    return _ts_in_intervals(row.get("timestamp"), intervals[hid])
+
+
+def _enrich_row_meta(line: str, row: dict, meta: dict) -> tuple[str, dict]:
+    """Backfill null apiary/hive metadata on an archived reading row when known."""
+    m = meta.get(row.get("hiveId") or "")
+    if not m:
+        return _ensure_newline(line), row
+    changed = False
+    for field in ("apiaryId", "apiaryName", "hiveName"):
+        if row.get(field) is None and m.get(field) is not None:
+            row[field] = m[field]
+            changed = True
+    return (json.dumps(row) + "\n" if changed else _ensure_newline(line)), row
+
+
+def _window_ok(f: Path, allowed: set | None) -> bool:
+    """Check if a file's window stem is in the allowed set, or if no filter is applied."""
+    return allowed is None or f.name.split(".", 1)[0] in allowed
+
+
+def iter_reading_files(hdir: Path, allowed: set | None = None) -> list[Path]:
+    """Readings windows for a hive, gz or plain; optionally only the completed windows."""
+    files = sorted(list(hdir.glob("*.readings.json")) + list(hdir.glob("*.readings.json.gz")))
+    return [f for f in files if _window_ok(f, allowed)]
+
+
+def iter_note_files(hdir: Path, allowed: set | None = None) -> list[Path]:
+    """Notes windows for a hive, gz or plain; optionally only the completed windows."""
+    files = sorted(list(hdir.glob("*.notes.json")) + list(hdir.glob("*.notes.json.gz")))
+    return [f for f in files if _window_ok(f, allowed)]
 
 
 # Baseline of known metrics observed in production to guarantee a fixed CSV header.
 KNOWN_METRIC_KEYS = {"audio", "humidity", "radar", "swarmState", "temperature", "weight"}
 
 
-def iter_readings(hdir: Path):
+def iter_readings(hdir: Path, allowed: set | None = None):
     """Yield (positionID, reading) for every reading row in a hive dir."""
-    for f in iter_reading_files(hdir):
-        for pos in load_json(f) or []:
+    for f in iter_reading_files(hdir, allowed):
+        for pos in (load_json(f) or []):
             pid = pos.get("positionID")
-            for r in pos.get("readings", []) or []:
+            for r in (pos.get("readings", []) or []):
                 yield pid, r
 
 
-def discover_metric_keys(raw: Path) -> set[str]:
+def _hive_metric_keys(
+    hdir: Path, allowed: set | None, hive_iv: list[tuple[int, int]] | None
+) -> set[str]:
+    """Collect metric keys for one hive dir within allowed windows and intervals."""
+    keys: set[str] = set()
+    for _pid, r in iter_readings(hdir, allowed):
+        if hive_iv is not None and not _ts_in_intervals(r.get("timestamp"), hive_iv):
+            continue
+        keys.update((r.get("readings") or {}).keys())
+    return keys
+
+
+def discover_metric_keys(
+    raw: Path,
+    only_hives: set | None = None,
+    windows: dict | None = None,
+    intervals: dict[str, list[tuple[int, int]]] | None = None,
+) -> set[str]:
     """Pass 1: scan every reading for its metric names so the CSV header is
     stable and fixed before any rows are streamed."""
     metric_keys: set[str] = set()
     for hdir in sorted(raw.iterdir()):
         if not hdir.is_dir():
             continue
-        for _pid, r in iter_readings(hdir):
-            metric_keys.update((r.get("readings") or {}).keys())
+        if only_hives is not None and hdir.name not in only_hives:
+            continue
+        allowed = windows.get(hdir.name, set()) if windows is not None else None
+        hive_iv = intervals.get(hdir.name, []) if intervals is not None else None
+        metric_keys.update(_hive_metric_keys(hdir, allowed, hive_iv))
     return metric_keys
 
 
-def build_row(hid: str, m: dict, pid, r: dict) -> dict:
+def build_row(hid: str, m: dict, pid: Any, r: dict) -> dict:
     """Project one raw reading into a flat output row (metrics get an m_ prefix)."""
     ts = r.get("timestamp")
     metrics = r.get("readings") or {}
@@ -96,14 +210,23 @@ def build_row(hid: str, m: dict, pid, r: dict) -> dict:
     }
 
 
-def iter_hive_rows(hdir: Path, m: dict, seen: set | None = None):
+def iter_hive_rows(
+    hdir: Path,
+    m: dict,
+    seen: set | None = None,
+    allowed: set | None = None,
+    hive_intervals: list[tuple[int, int]] | None = None,
+) -> Any:
     """Yield deduped rows for one hive dir. Overlapping/re-fetched windows can
     repeat the same (position, device, timestamp); dedupe within the hive
     (reset per hive to bound memory)."""
     hid = hdir.name
     hive_seen = seen if seen is not None else set()
-    for pid, r in iter_readings(hdir):
-        dk = (pid, r.get("deviceId"), r.get("timestamp"))
+    for pid, r in iter_readings(hdir, allowed):
+        ts = r.get("timestamp")
+        if hive_intervals is not None and not _ts_in_intervals(ts, hive_intervals):
+            continue
+        dk = (pid, r.get("deviceId"), ts)
         if dk in hive_seen:
             continue
         hive_seen.add(dk)
@@ -123,10 +246,12 @@ def accumulate_coverage(coverage: defaultdict, row: dict) -> None:
 
 
 def _has_content(path: Path) -> bool:
+    """True if path exists and is non-empty."""
     return path.exists() and path.stat().st_size > 0
 
 
 def _ensure_newline(line: str) -> str:
+    """Return line with a trailing newline."""
     return line if line.endswith("\n") else line + "\n"
 
 
@@ -138,42 +263,161 @@ def _note_key(hid, note: dict) -> tuple:
     return (hid, (note.get("created"), note.get("description"), note_text))
 
 
-def _copy_existing_notes(fh, existing_target: Path, seen_notes: set) -> int:
-    """Copy the prior notes archive into fh, recording each key. Returns the count."""
+def _load_note_items(path: Path) -> list[dict]:
+    """Load note dicts from a raw notes file, returning [] if unreadable."""
+    try:
+        payload = load_json(path)
+    except _READ_ERRORS:
+        return []
+    items = payload if isinstance(payload, list) else (payload or {}).get("notes", [])
+    return [n for n in (items or []) if isinstance(n, dict)]
+
+
+def _note_epoch(note: dict) -> Any:
+    """Return the note's window-comparable epoch (timestamp, falling back to created)."""
+    ts = note.get("timestamp")
+    return note.get("created") if ts is None else ts
+
+
+def _hive_note_keys(hdir: Path, allowed: set[str], include_completed: bool) -> set[tuple]:
+    """Collect undated _note_key tuples from completed or unmanifested note files in hdir."""
+    all_files = sorted(list(hdir.glob("*.notes.json")) + list(hdir.glob("*.notes.json.gz")))
+    selected = [f for f in all_files if (_window_ok(f, allowed) is include_completed)]
+    return {
+        _note_key(hdir.name, n)
+        for f in selected
+        for n in _load_note_items(f)
+        if _note_epoch(n) is None
+    }
+
+
+def _unmanifested_raw_note_keys(raw: Path, windows: dict[str, set[str]]) -> set[tuple]:
+    """Note keys present only in unmanifested raw files (for undated notes)."""
+    if not raw.exists():
+        return set()
+    excluded: set[tuple] = set()
+    for hdir in sorted(raw.iterdir()):
+        if not hdir.is_dir() or hdir.name not in windows:
+            continue
+        allowed = windows[hdir.name]
+        excluded |= _hive_note_keys(hdir, allowed, False) - _hive_note_keys(hdir, allowed, True)
+    return excluded
+
+
+def _note_in_completed(
+    note: dict,
+    intervals: dict[str, list[tuple[int, int]]] | None,
+    excluded_keys: set[tuple] | None = None,
+) -> bool:
+    """Return True if completed-only filtering is off or note belongs to a completed window."""
+    if intervals is None:
+        return True
+    hid = note.get("hiveId")
+    if not isinstance(hid, str) or hid not in intervals:
+        return False
+    ts = _note_epoch(note)
+    if ts is None:
+        return not (excluded_keys and _note_key(hid, note) in excluded_keys)
+    return _ts_in_intervals(ts, intervals[hid])
+
+
+def _enrich_note_meta(line: str, note: dict, meta: dict) -> str:
+    """Backfill null hiveName on an archived note when manifest metadata exists."""
+    hid = note.get("hiveId") or ""
+    hive_name = (meta.get(hid) or {}).get("hiveName")
+    if note.get("hiveName") is None and hive_name is not None:
+        note["hiveName"] = hive_name
+        return json.dumps(note) + "\n"
+    return _ensure_newline(line)
+
+
+def _preserve_prune_backup(target: Path, pruned: int) -> None:
+    """Preserve a non-clobbering .bak copy of target before pruning archived records."""
+    if pruned <= 0 or not _has_content(target):
+        return
+    bak = target.with_name(target.name + ".bak")
+    if bak.exists():
+        # Never clobber an earlier backup: keep each prune's pre-prune copy under a unique name.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        bak = target.with_name(f"{target.name}.bak.{stamp}")
+    shutil.copy2(target, bak)
+
+
+def _copy_existing_notes(
+    fh: TextIO,
+    existing_target: Path,
+    seen_notes: set,
+    meta: dict | None = None,
+    intervals: dict[str, list[tuple[int, int]]] | None = None,
+    excluded_keys: set[tuple] | None = None,
+) -> tuple[int, int]:
+    """Copy retained notes from the prior archive into fh, returning (kept, pruned)."""
     n_notes = 0
+    pruned_notes = 0
     with existing_target.open("r", encoding="utf-8") as in_notes:
         for line in in_notes:
             if not line.strip():
                 continue
             note = json.loads(line)
+            if not _note_in_completed(note, intervals, excluded_keys):
+                pruned_notes += 1
+                continue
             seen_notes.add(_note_key(note.get("hiveId"), note))
-            fh.write(_ensure_newline(line))
+            fh.write(_enrich_note_meta(line, note, meta or {}))
             n_notes += 1
-    return n_notes
+    return n_notes, pruned_notes
 
 
-def _iter_raw_notes(raw: Path):
+def _iter_raw_notes(raw: Path, meta: dict | None = None, completed_only: bool = False,
+                    windows: dict | None = None):
     """Yield (hiveId, note) for every note in the raw tree."""
     for hdir in sorted(raw.iterdir()):
         if not hdir.is_dir():
             continue
-        for f in iter_note_files(hdir):
+        if completed_only and hdir.name not in (meta or {}):
+            continue
+        allowed = windows.get(hdir.name, set()) if completed_only and windows is not None else None
+        for f in iter_note_files(hdir, allowed):
             payload = load_json(f)
             items = payload if isinstance(payload, list) else (payload or {}).get("notes", [])
             for n in items or []:
                 yield hdir.name, n
 
 
-def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, existing_target: Path | None = None) -> int:
+def write_notes(
+    path: Path,
+    meta: dict,
+    raw: Path = RAW,
+    merge: bool = False,
+    existing_target: Path | None = None,
+    completed_only: bool = False,
+    windows: dict | None = None,
+    intervals: dict[str, list[tuple[int, int]]] | None = None,
+    stats_out: dict[str, int] | None = None,
+) -> int:
     """Notes are small — flatten them to plain ndjson. Returns the row count."""
     n_notes = 0
+    pruned_notes = 0
     seen_notes: set = set()
+    active_intervals: dict[str, list[tuple[int, int]]] | None = None
+    excluded_keys: set[tuple] | None = None
+    if completed_only:
+        active_intervals = intervals if intervals is not None else {}
+        excluded_keys = _unmanifested_raw_note_keys(raw, windows or {})
+
     with path.open("w", encoding="utf-8") as fh:
         if merge and existing_target and _has_content(existing_target):
-            n_notes += _copy_existing_notes(fh, existing_target, seen_notes)
+            kept, pruned_notes = _copy_existing_notes(
+                fh, existing_target, seen_notes, meta, active_intervals, excluded_keys
+            )
+            n_notes += kept
 
         if raw.exists():
-            for hid, n in _iter_raw_notes(raw):
+            for hid, n in _iter_raw_notes(raw, meta, completed_only, windows):
+                if not isinstance(n, dict):
+                    continue
+                if not _note_in_completed({"hiveId": hid, **n}, active_intervals, excluded_keys):
+                    continue
                 nk = _note_key(hid, n)
                 if nk in seen_notes:
                     continue
@@ -181,6 +425,8 @@ def write_notes(path: Path, meta: dict, raw: Path = RAW, merge: bool = False, ex
                 hive_name = meta.get(hid, {}).get("hiveName")
                 fh.write(json.dumps({"hiveId": hid, "hiveName": hive_name, **n}) + "\n")
                 n_notes += 1
+    if stats_out is not None:
+        stats_out["pruned_notes"] = pruned_notes
     return n_notes
 
 
@@ -204,37 +450,58 @@ BASE_COLS = ["apiaryId", "apiaryName", "hiveId", "hiveName", "positionID",
              "deviceId", "timestamp", "datetime", "batteryLevel", "chargeRemaining"]
 
 
-def _existing_metric_keys(target_ndjson: Path) -> set[str]:
-    """Metric names (sans m_ prefix) already present in a readings archive."""
+def _existing_metric_keys(
+    target_ndjson: Path, intervals: dict[str, list[tuple[int, int]]] | None = None
+) -> set[str]:
+    """Metric names (sans m_ prefix) already present in retained archive rows."""
     keys: set[str] = set()
     with gzip.open(target_ndjson, "rt", encoding="utf-8") as in_fh:
         for line in in_fh:
             if not line.strip():
                 continue
-            keys.update(k[2:] for k in json.loads(line) if k.startswith("m_") and len(k) > 2)
+            row = json.loads(line)
+            if not _row_in_completed(row, intervals):
+                continue
+            keys.update(k[2:] for k in row if k.startswith("m_") and len(k) > 2)
     return keys
 
 
-def _collect_metric_keys(args, target_ndjson: Path) -> set[str]:
+def _collect_metric_keys(
+    args: argparse.Namespace,
+    target_ndjson: Path,
+    meta: dict,
+    windows: dict | None = None,
+    intervals: dict[str, list[tuple[int, int]]] | None = None,
+) -> set[str]:
     """Pass 1: discover metric keys, unioned with KNOWN_METRIC_KEYS for fixed header stability."""
     metric_keys: set[str] = set(KNOWN_METRIC_KEYS)
     if RAW.exists() and not args.no_csv:
-        metric_keys.update(discover_metric_keys(RAW))
+        metric_keys.update(
+            discover_metric_keys(
+                RAW,
+                set(meta) if args.completed_only else None,
+                windows if args.completed_only else None,
+                intervals if args.completed_only else None,
+            )
+        )
     # In merge mode, include any existing m_* metrics already in the archive
     # so historical fields remain in the rebuilt CSV even if raw files were purged.
     if args.merge and _has_content(target_ndjson):
-        metric_keys.update(_existing_metric_keys(target_ndjson))
+        metric_keys.update(
+            _existing_metric_keys(target_ndjson, intervals if args.completed_only else None)
+        )
     return metric_keys
 
 
 class _ReadingsSink:
     """Fans each output row out to the NDJSON stream, optional CSV, and coverage."""
 
-    def __init__(self, ndjson_fh, csv_writer, cols: list[str]):
+    def __init__(self, ndjson_fh: TextIO, csv_writer: Any, cols: list[str]):
         self.ndjson_fh = ndjson_fh
         self.csv_writer = csv_writer
         self.cols = cols
         self.n_rows = 0
+        self.pruned_rows = 0
         self.coverage = defaultdict(lambda: {"rows": 0, "min_ts": None, "max_ts": None,
                                              "devices": set(), "positions": set()})
 
@@ -246,28 +513,52 @@ class _ReadingsSink:
         accumulate_coverage(self.coverage, row)
 
 
-def _stream_existing_readings(sink: _ReadingsSink, target_ndjson: Path, seen: dict) -> None:
-    """Replay the prior archive into sink, recording its dedupe keys in seen."""
+def _stream_existing_readings(
+    sink: _ReadingsSink,
+    target_ndjson: Path,
+    seen: dict,
+    meta: dict | None = None,
+    intervals: dict[str, list[tuple[int, int]]] | None = None,
+) -> None:
+    """Replay retained rows from the prior archive into sink, recording dedupe keys."""
     with gzip.open(target_ndjson, "rt", encoding="utf-8") as in_fh:
         for line in in_fh:
             if not line.strip():
                 continue
             row = json.loads(line)
+            if not _row_in_completed(row, intervals):
+                sink.pruned_rows += 1
+                continue
+            out_line, row = _enrich_row_meta(line, row, meta or {})
             seen[row.get("hiveId")].add((row.get("positionID"), row.get("deviceId"), row.get("timestamp")))
-            sink.emit(_ensure_newline(line), row)
+            sink.emit(out_line, row)
 
 
-def _stream_raw_readings(sink: _ReadingsSink, meta: dict, seen: dict, merge: bool) -> None:
+def _stream_raw_readings(sink: _ReadingsSink, meta: dict, seen: dict, merge: bool,
+                         completed_only: bool = False, windows: dict | None = None,
+                         intervals: dict[str, list[tuple[int, int]]] | None = None) -> None:
+    """Stream deduped rows from the raw tree into sink."""
     for hdir in sorted(RAW.iterdir()):
         if not hdir.is_dir():
             continue
+        if completed_only and hdir.name not in meta:
+            continue
         hive_seen = seen[hdir.name] if merge else None
-        for row in iter_hive_rows(hdir, meta.get(hdir.name, {}), hive_seen):
+        allowed = windows.get(hdir.name, set()) if completed_only and windows is not None else None
+        hive_iv = (intervals or {}).get(hdir.name, []) if completed_only else None
+        for row in iter_hive_rows(hdir, meta.get(hdir.name, {}), hive_seen, allowed, hive_iv):
             sink.emit(json.dumps(row) + "\n", row)
 
 
-def _write_readings(args, meta: dict, metric_cols: list[str],
-                    target_ndjson: Path, target_csv: Path) -> _ReadingsSink:
+def _write_readings(
+    args: argparse.Namespace,
+    meta: dict,
+    metric_cols: list[str],
+    target_ndjson: Path,
+    target_csv: Path,
+    windows: dict | None = None,
+    intervals: dict[str, list[tuple[int, int]]] | None = None,
+) -> _ReadingsSink:
     """Stream readings to tmp files, then atomically replace the targets."""
     proc_id = os.getpid()
     tmp_ndjson = OUT / f"readings.ndjson.gz.tmp.{proc_id}"
@@ -282,12 +573,13 @@ def _write_readings(args, meta: dict, metric_cols: list[str],
 
     sink = _ReadingsSink(ndjson_fh, csv_writer, BASE_COLS + metric_cols)
     seen: dict[str, set] = defaultdict(set)
+    active_intervals = intervals if args.completed_only else None
     readings_success = False
     try:
         if args.merge and _has_content(target_ndjson):
-            _stream_existing_readings(sink, target_ndjson, seen)
+            _stream_existing_readings(sink, target_ndjson, seen, meta, active_intervals)
         if RAW.exists():
-            _stream_raw_readings(sink, meta, seen, args.merge)
+            _stream_raw_readings(sink, meta, seen, args.merge, args.completed_only, windows, intervals)
         readings_success = True
     finally:
         ndjson_fh.close()
@@ -298,57 +590,91 @@ def _write_readings(args, meta: dict, metric_cols: list[str],
             tmp_csv.unlink(missing_ok=True)
 
     if tmp_ndjson.exists():
+        _preserve_prune_backup(target_ndjson, sink.pruned_rows)
         tmp_ndjson.replace(target_ndjson)
     if not args.no_csv and tmp_csv.exists():
+        _preserve_prune_backup(target_csv, sink.pruned_rows)
         tmp_csv.replace(target_csv)
     return sink
 
 
-def _write_notes_atomic(meta: dict, merge: bool, target_notes: Path) -> int:
+def _write_notes_atomic(
+    meta: dict,
+    merge: bool,
+    target_notes: Path,
+    completed_only: bool = False,
+    windows: dict | None = None,
+    intervals: dict[str, list[tuple[int, int]]] | None = None,
+) -> tuple[int, int]:
     """Write notes to a tmp file, then atomically replace the target."""
     tmp_notes = OUT / f"notes.ndjson.tmp.{os.getpid()}"
+    notes_stats: dict[str, int] = {}
     notes_success = False
     try:
-        n_notes = write_notes(tmp_notes, meta, raw=RAW, merge=merge, existing_target=target_notes)
+        n_notes = write_notes(
+            tmp_notes, meta, raw=RAW, merge=merge, existing_target=target_notes,
+            completed_only=completed_only, windows=windows, intervals=intervals,
+            stats_out=notes_stats,
+        )
         notes_success = True
     finally:
         if not notes_success and tmp_notes.exists():
             tmp_notes.unlink(missing_ok=True)
 
+    pruned_notes = notes_stats.get("pruned_notes", 0)
     if tmp_notes.exists():
+        _preserve_prune_backup(target_notes, pruned_notes)
         tmp_notes.replace(target_notes)
-    return n_notes
+    return n_notes, pruned_notes
 
 
 def main() -> int:
+    """CLI entry point; returns the process exit code."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--no-csv", action="store_true", help="skip the (large) CSV output")
     ap.add_argument("--merge", action="store_true",
                     help="merge incremental raw windows into existing readings and notes outputs")
+    ap.add_argument("--completed-only", action="store_true",
+                    help="skip raw hive dirs with no completed manifest entry (their metadata is unknown), "
+                         "skip window files within known hives not listed as completed in the manifest, "
+                         "and under --merge prune archived rows/notes outside completed windows "
+                         "(preserving non-clobbering .bak backups); requires manifest.json")
     args = ap.parse_args()
 
     if not RAW.exists() and not args.merge:
         print("no raw data yet; run extract_all.py first", file=sys.stderr)
         return 1
 
+    if args.completed_only and not (OUT / "manifest.json").exists():
+        print("--completed-only requires manifest.json; run extract_all.py first", file=sys.stderr)
+        return 1
+
     manifest = load_json(OUT / "manifest.json") if (OUT / "manifest.json").exists() else {}
     meta = hive_meta(manifest)
+    windows = hive_windows(manifest)
+    intervals = hive_intervals(manifest)
 
     target_ndjson = OUT / "readings.ndjson.gz"
     target_csv = OUT / "readings.csv.gz"
     target_notes = OUT / "notes.ndjson"
 
-    metric_keys = _collect_metric_keys(args, target_ndjson)
+    metric_keys = _collect_metric_keys(args, target_ndjson, meta, windows, intervals)
     metric_cols = [f"m_{k}" for k in sorted(metric_keys)]
 
-    sink = _write_readings(args, meta, metric_cols, target_ndjson, target_csv)
-    n_notes = _write_notes_atomic(meta, args.merge, target_notes)
+    sink = _write_readings(args, meta, metric_cols, target_ndjson, target_csv, windows, intervals)
+    n_notes, pruned_notes = _write_notes_atomic(
+        meta, args.merge, target_notes, args.completed_only, windows, intervals
+    )
 
     cov_out = build_coverage(sink.coverage, meta)
-    (OUT / "coverage.json").write_text(json.dumps(cov_out, indent=2))
+    target_cov = OUT / "coverage.json"
+    _preserve_prune_backup(target_cov, sink.pruned_rows)
+    target_cov.write_text(json.dumps(cov_out, indent=2))
 
     print(f"readings rows : {sink.n_rows}")
     print(f"notes         : {n_notes}")
+    if sink.pruned_rows or pruned_notes:
+        print(f"pruned archive: {sink.pruned_rows} readings, {pruned_notes} notes (.bak preserved)")
     print(f"metrics seen  : {sorted(metric_keys)}")
     print(f"hives w/ data : {len(cov_out)}")
     outs = "readings.ndjson.gz, " + ("" if args.no_csv else "readings.csv.gz, ") + "notes.ndjson, coverage.json"

@@ -15,11 +15,16 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="$DIR/.venv/bin/python"
 LOG="$DIR/data/cron_sync.log"
 LOCKFILE="$DIR/data/.sync.lock"
+MANIFEST="$DIR/data/extract/manifest.json"
 
 cd "$DIR" || exit 1
 [[ -x "$PY" ]] || PY="python3"
 
-ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+ts() {
+    # Output the current UTC timestamp in ISO 8601 format.
+    date -u +%Y-%m-%dT%H:%M:%SZ
+    return
+}
 
 mkdir -p "$DIR/data"
 
@@ -41,19 +46,43 @@ extract_rc=0
 "$PY" scripts/extract_all.py --catchup >> "$LOG" 2>&1 || extract_rc=$?
 echo "--- extract exit $extract_rc ---" >> "$LOG"
 
+if [[ ! -f "$MANIFEST" ]]; then
+    if [[ "$extract_rc" -ne 0 ]]; then
+        echo "=== $(ts) sync run failed during extract before manifest creation (exit $extract_rc) ===" >> "$LOG"
+        exit "$extract_rc"
+    fi
+    echo "=== $(ts) no manifest.json yet; skipping flatten ===" >> "$LOG"
+    echo "=== $(ts) run done ===" >> "$LOG"
+    exit 0
+fi
+
 if [[ "$extract_rc" -ne 0 ]]; then
-    echo "=== $(ts) sync run failed during extract (exit $extract_rc) ===" >> "$LOG"
-    exit "$extract_rc"
+    echo "=== $(ts) extract failed (exit $extract_rc); merging any saved windows anyway ===" >> "$LOG"
 fi
 
 # Merge new raw windows with existing analysis outputs (no API calls).
+# Runs even after a partial extract failure so durable windows get published.
+# --completed-only is always used: extract_all.py exits 0 after a rate-limit or
+# budget pause that can leave unmanifested (partial) windows, so the exit code
+# alone cannot tell whether every window completed.
 flatten_rc=0
-"$PY" scripts/flatten.py --merge >> "$LOG" 2>&1 || flatten_rc=$?
+flatten_args=(--merge --completed-only)
+"$PY" scripts/flatten.py "${flatten_args[@]}" >> "$LOG" 2>&1 || flatten_rc=$?
 echo "--- flatten exit $flatten_rc ---" >> "$LOG"
+
+if [[ "$extract_rc" -ne 0 && "$flatten_rc" -ne 0 ]]; then
+    echo "=== $(ts) sync run failed during extract (exit $extract_rc) and flatten (exit $flatten_rc) ===" >> "$LOG"
+    exit "$extract_rc"
+fi
 
 if [[ "$flatten_rc" -ne 0 ]]; then
     echo "=== $(ts) sync run failed during flatten (exit $flatten_rc) ===" >> "$LOG"
     exit "$flatten_rc"
+fi
+
+if [[ "$extract_rc" -ne 0 ]]; then
+    echo "=== $(ts) sync run failed during extract (exit $extract_rc) ===" >> "$LOG"
+    exit "$extract_rc"
 fi
 
 echo "=== $(ts) run done ===" >> "$LOG"

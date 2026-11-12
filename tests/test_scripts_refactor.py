@@ -640,3 +640,271 @@ def test_all_caught_up():
     assert extract_all._all_caught_up(manifest, hives, 0, 50)
     assert not extract_all._all_caught_up(manifest, hives, 0, 100)
     assert not extract_all._all_caught_up(manifest, [], 0, 50)
+
+
+def test_hive_meta_preserves_pipe_in_hive_id():
+    manifest = {"completed": {
+        "hive|with|pipe|1000|4200": {"apiaryName": "N", "apiaryId": "A", "hiveName": "H"},
+    }}
+    meta = flatten.hive_meta(manifest)
+    assert list(meta) == ["hive|with|pipe"]
+
+
+def test_flatten_completed_only_requires_manifest(tmp_path, monkeypatch, capsys):
+    out = tmp_path / "extract"
+    (out / "raw").mkdir(parents=True)
+    existing = out / "notes.ndjson"
+    existing.write_text('{"hiveId": "h1"}\n')
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--completed-only"])
+    assert flatten.main() == 1
+    assert "manifest.json" in capsys.readouterr().err
+    assert existing.read_text() == '{"hiveId": "h1"}\n'
+    assert not (out / "readings.ndjson.gz").exists()
+
+
+def test_manifest_helpers_skip_malformed_keys_consistently():
+    manifest = {
+        "completed": {
+            "malformed_key": {"apiaryName": "Bad", "apiaryId": "B1", "hiveName": "Bad1"},
+            "two|parts": {"apiaryName": "Bad", "apiaryId": "B2", "hiveName": "Bad2"},
+            "|10|20": {"apiaryName": "Bad", "apiaryId": "B3", "hiveName": "EmptyHive"},
+            "h1|bad|20": {"apiaryName": "Bad", "apiaryId": "B4", "hiveName": "BadTs"},
+            "h1|20|20": {"apiaryName": "Bad", "apiaryId": "B5", "hiveName": "ZeroLen"},
+            "h1|30|10": {"apiaryName": "Bad", "apiaryId": "B6", "hiveName": "Inverted"},
+            "h1|10|20": {"reading_rows": 5},
+            "h1|15|25": {"reading_rows": 3},
+            "h1|25|30": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "Hive-1"},
+            "h1|50|60": {"reading_rows": 2},
+        }
+    }
+    meta = flatten.hive_meta(manifest)
+    assert list(meta) == ["h1"]
+    assert meta["h1"] == {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "Hive-1"}
+    assert flatten.hive_windows(manifest) == {"h1": {"10-20", "15-25", "25-30", "50-60"}}
+    assert flatten.hive_intervals(manifest) == {"h1": [(10, 30), (50, 60)]}
+    spans = flatten.hive_intervals(manifest)["h1"]
+    assert flatten._ts_in_intervals(10, spans)
+    assert flatten._ts_in_intervals(22, spans)
+    assert not flatten._ts_in_intervals(30, spans)
+    assert not flatten._ts_in_intervals(40, spans)
+    assert flatten._ts_in_intervals(55, spans)
+    assert not flatten._ts_in_intervals(float("nan"), spans)
+    assert not flatten._ts_in_intervals(15, [])
+
+
+def test_flatten_completed_only_handles_gz_notes(tmp_path, monkeypatch):
+    out = tmp_path / "extract"
+    hdir = out / "raw" / "h1"
+    hdir.mkdir(parents=True)
+    with gzip.open(hdir / "10-20.readings.json.gz", "wt", encoding="utf-8") as fh:
+        json.dump([{"positionID": "p", "readings": [
+            {"deviceId": "d", "timestamp": 15, "readings": {"temperature": 80.0}}]}], fh)
+    with gzip.open(hdir / "10-20.notes.json.gz", "wt", encoding="utf-8") as fh:
+        json.dump({"notes": [{"id": "n-gz", "timestamp": 15, "description": "ok"}]}, fh)
+    # Truncated unmanifested .notes.json.gz must be ignored under --completed-only
+    (hdir / "20-30.notes.json.gz").write_bytes(b"\x1f\x8bcorrupt")
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert flatten.main() == 0
+    notes = [json.loads(line) for line in (out / "notes.ndjson").read_text().splitlines()]
+    assert notes == [{"hiveId": "h1", "hiveName": "H1", "id": "n-gz", "timestamp": 15, "description": "ok"}]
+
+
+def test_flatten_merge_completed_only_without_raw_dir_and_non_numeric_ts(tmp_path, monkeypatch):
+    out = tmp_path / "extract"
+    out.mkdir(parents=True)
+    with gzip.open(out / "readings.ndjson.gz", "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "hiveId": "h1", "positionID": "p1", "deviceId": "d1",
+            "timestamp": 15, "m_temperature": 80.0,
+        }) + "\n")
+        fh.write(json.dumps({
+            "hiveId": "h1", "positionID": "p1", "deviceId": "d1",
+            "timestamp": True, "m_temperature": 81.0,
+        }) + "\n")
+        fh.write(json.dumps({
+            "hiveId": "unknown", "positionID": "p1", "deviceId": "d1",
+            "timestamp": 15, "m_temperature": 82.0,
+        }) + "\n")
+    (out / "notes.ndjson").write_text(
+        json.dumps({"hiveId": "h1", "id": "n1", "timestamp": 15}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n2", "timestamp": "bad"}) + "\n"
+    )
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")  # does not exist (purged)
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert flatten.main() == 0
+    with gzip.open(out / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        rows = [json.loads(line) for line in fh]
+    assert len(rows) == 1 and rows[0]["hiveName"] == "H1"
+    notes = [json.loads(line) for line in (out / "notes.ndjson").read_text().splitlines()]
+    assert [n["id"] for n in notes] == ["n1"]
+    assert notes[0]["hiveName"] == "H1"
+
+
+def test_flatten_merge_completed_only_preserves_purged_timestamped_note_and_filters_created_only(
+    tmp_path, monkeypatch
+):
+    out = tmp_path / "extract"
+    hdir = out / "raw" / "h1"
+    hdir.mkdir(parents=True)
+    # Completed 10-20 raw files were purged; corrupt UTF-8 in unmanifested raw file must not abort
+    (hdir / "25-35.notes.json").write_bytes(b"\xff\xfeinvalid-utf8")
+    # Overlapping unmanifested 10-30 raw notes remain on disk after interrupted run
+    (hdir / "10-30.notes.json").write_text(json.dumps({
+        "notes": [
+            {"id": "n-completed", "timestamp": 15, "description": "keep me"},
+            {"id": "n-incomplete", "timestamp": 25, "description": "drop me"},
+            {"id": "n-notime-unmanifested", "description": "drop timeless unmanifested"},
+        ]
+    }))
+    (out / "notes.ndjson").write_text(
+        json.dumps({"hiveId": "h1", "id": "n-completed", "timestamp": 15}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-incomplete", "timestamp": 25}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-created-ok", "created": 18}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-created-outside", "created": 28}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-notime-unmanifested", "description": "drop timeless unmanifested"}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-notime-purged", "description": "keep timeless archived"}) + "\n"
+    )
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert flatten.main() == 0
+    notes = [json.loads(line) for line in (out / "notes.ndjson").read_text().splitlines()]
+    assert [n["id"] for n in notes] == ["n-completed", "n-created-ok", "n-notime-purged"]
+    assert all(n["hiveName"] == "H1" for n in notes)
+
+
+def test_flatten_merge_completed_only_preserves_non_clobbering_bak_and_logs_pruned_counts(
+    tmp_path, monkeypatch, capsys
+):
+    out = tmp_path / "extract"
+    out.mkdir(parents=True)
+    orig_rows = [
+        {"hiveId": "h1", "positionID": "p1", "deviceId": "d1", "timestamp": 15, "m_temperature": 80.0},
+        {"hiveId": "h1", "positionID": "p1", "deviceId": "d1", "timestamp": 25, "m_temperature": 81.0},
+        {"hiveId": "h2", "positionID": "p1", "deviceId": "d2", "timestamp": 15, "m_temperature": 82.0},
+    ]
+    with gzip.open(out / "readings.ndjson.gz", "wt", encoding="utf-8") as fh:
+        for r in orig_rows:
+            fh.write(json.dumps(r) + "\n")
+    with gzip.open(out / "readings.csv.gz", "wt", encoding="utf-8") as fh:
+        fh.write("legacy-csv-sentinel\n")
+    orig_notes_text = (
+        json.dumps({"hiveId": "h1", "id": "n-keep", "timestamp": 15}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n-drop", "timestamp": 25}) + "\n"
+    )
+    (out / "notes.ndjson").write_text(orig_notes_text)
+    (out / "coverage.json").write_text('{"legacy": true}\n')
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only"])
+    assert flatten.main() == 0
+    stdout1 = capsys.readouterr().out
+    assert "pruned archive: 2 readings, 1 notes (.bak preserved)" in stdout1
+
+    with gzip.open(out / "readings.ndjson.gz.bak", "rt", encoding="utf-8") as fh:
+        bak_rows = [json.loads(line) for line in fh]
+    assert bak_rows == orig_rows
+    with gzip.open(out / "readings.csv.gz.bak", "rt", encoding="utf-8") as fh:
+        assert fh.read() == "legacy-csv-sentinel\n"
+    assert (out / "notes.ndjson.bak").read_text() == orig_notes_text
+    assert (out / "coverage.json.bak").read_text() == '{"legacy": true}\n'
+
+    # Subsequent prune must NOT overwrite existing .bak files; steady-state run logs no prune
+    assert flatten.main() == 0
+    stdout2 = capsys.readouterr().out
+    assert "pruned archive:" not in stdout2
+    with gzip.open(out / "readings.ndjson.gz", "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(orig_rows[0]) + "\n")
+        fh.write(json.dumps(orig_rows[1]) + "\n")
+    assert flatten.main() == 0
+    with gzip.open(out / "readings.ndjson.gz.bak", "rt", encoding="utf-8") as fh:
+        assert [json.loads(line) for line in fh] == orig_rows
+    assert (out / "coverage.json.bak").read_text() == '{"legacy": true}\n'
+
+
+def test_flatten_completed_only_filters_raw_rows_and_notes_by_interval(tmp_path, monkeypatch):
+    out = tmp_path / "extract"
+    hdir = out / "raw" / "h1"
+    hdir.mkdir(parents=True)
+    (hdir / "10-20.readings.json").write_text(json.dumps([{"positionID": "p", "readings": [
+        {"deviceId": "d", "timestamp": 15, "readings": {"temperature": 80.0}},
+        {"deviceId": "d", "timestamp": 20, "readings": {"temperature": 81.0}},  # == end, excluded
+    ]}]))
+    (hdir / "10-20.notes.json").write_text(json.dumps({"notes": [
+        {"id": "in", "created": 12},
+        {"id": "before-start", "created": 5},
+        {"id": "bad-ts", "timestamp": "x"},
+    ]}))
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert flatten.main() == 0
+    with gzip.open(out / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        assert [json.loads(line)["timestamp"] for line in fh] == [15]
+    notes = [json.loads(line) for line in (out / "notes.ndjson").read_text().splitlines()]
+    assert [n["id"] for n in notes] == ["in"]
+
+
+def test_preserve_prune_backup_keeps_each_prune_under_unique_name(tmp_path):
+    target = tmp_path / "notes.ndjson"
+    target.write_text("v1\n")
+    flatten._preserve_prune_backup(target, 1)
+    target.write_text("v2\n")
+    flatten._preserve_prune_backup(target, 1)
+    assert (tmp_path / "notes.ndjson.bak").read_text() == "v1\n"
+    extra = [p for p in tmp_path.glob("notes.ndjson.bak.*")]
+    assert len(extra) == 1 and extra[0].read_text() == "v2\n"
+
+
+def test_flatten_completed_only_raw_non_numeric_timestamp_and_metric_discovery_parity(
+    tmp_path, monkeypatch
+):
+    import csv
+
+    out = tmp_path / "extract"
+    hdir = out / "raw" / "h1"
+    hdir.mkdir(parents=True)
+    (hdir / "10-20.readings.json").write_text(json.dumps([{"positionID": "p", "readings": [
+        {"deviceId": "d", "timestamp": 15, "readings": {"temperature": 80.0}},
+        {"deviceId": "d", "timestamp": 20, "readings": {"boundaryOnly": 99.0}},
+        {"deviceId": "d", "timestamp": "bad-ts", "readings": {"corruptOnly": 1.0}},
+    ]}]))
+    (hdir / "10-20.notes.json").write_text(json.dumps({"notes": [
+        "not-a-dict",
+        {"id": "ok", "timestamp": 15},
+    ]}))
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only"])
+    assert flatten.main() == 0
+    with gzip.open(out / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        assert [json.loads(line)["timestamp"] for line in fh] == [15]
+    with gzip.open(out / "readings.csv.gz", "rt", encoding="utf-8", newline="") as fh:
+        header = next(csv.reader(fh))
+    assert "m_boundaryOnly" not in header
+    assert "m_corruptOnly" not in header
+    assert [json.loads(line)["id"] for line in (out / "notes.ndjson").read_text().splitlines()] == ["ok"]
