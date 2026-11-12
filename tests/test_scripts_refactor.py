@@ -662,3 +662,79 @@ def test_flatten_completed_only_requires_manifest(tmp_path, monkeypatch, capsys)
     assert "manifest.json" in capsys.readouterr().err
     assert existing.read_text() == '{"hiveId": "h1"}\n'
     assert not (out / "readings.ndjson.gz").exists()
+
+
+def test_manifest_helpers_skip_malformed_keys_consistently():
+    manifest = {
+        "completed": {
+            "malformed_key": {"apiaryName": "Bad", "apiaryId": "B1", "hiveName": "Bad1"},
+            "two|parts": {"apiaryName": "Bad", "apiaryId": "B2", "hiveName": "Bad2"},
+            "|10|20": {"apiaryName": "Bad", "apiaryId": "B3", "hiveName": "EmptyHive"},
+            "h1|bad|20": {"apiaryName": "Bad", "apiaryId": "B4", "hiveName": "BadTs"},
+            "h1|10|20": {"reading_rows": 5},
+            "h1|20|30": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "Hive-1"},
+        }
+    }
+    meta = flatten.hive_meta(manifest)
+    assert list(meta) == ["h1"]
+    assert meta["h1"] == {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "Hive-1"}
+    assert flatten.hive_windows(manifest) == {"h1": {"10-20", "20-30"}}
+    assert flatten.hive_intervals(manifest) == {"h1": [(10, 20), (20, 30)]}
+
+
+def test_flatten_completed_only_handles_gz_notes(tmp_path, monkeypatch):
+    out = tmp_path / "extract"
+    hdir = out / "raw" / "h1"
+    hdir.mkdir(parents=True)
+    with gzip.open(hdir / "10-20.readings.json.gz", "wt", encoding="utf-8") as fh:
+        json.dump([{"positionID": "p", "readings": [
+            {"deviceId": "d", "timestamp": 15, "readings": {"temperature": 80.0}}]}], fh)
+    with gzip.open(hdir / "10-20.notes.json.gz", "wt", encoding="utf-8") as fh:
+        json.dump({"notes": [{"id": "n-gz", "timestamp": 15, "description": "ok"}]}, fh)
+    # Truncated unmanifested .notes.json.gz must be ignored under --completed-only
+    (hdir / "20-30.notes.json.gz").write_bytes(b"\x1f\x8bcorrupt")
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert flatten.main() == 0
+    notes = [json.loads(line) for line in (out / "notes.ndjson").read_text().splitlines()]
+    assert notes == [{"hiveId": "h1", "hiveName": "H1", "id": "n-gz", "timestamp": 15, "description": "ok"}]
+
+
+def test_flatten_merge_completed_only_without_raw_dir_and_non_numeric_ts(tmp_path, monkeypatch):
+    out = tmp_path / "extract"
+    out.mkdir(parents=True)
+    with gzip.open(out / "readings.ndjson.gz", "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "hiveId": "h1", "positionID": "p1", "deviceId": "d1",
+            "timestamp": 15, "m_temperature": 80.0,
+        }) + "\n")
+        fh.write(json.dumps({
+            "hiveId": "h1", "positionID": "p1", "deviceId": "d1",
+            "timestamp": True, "m_temperature": 81.0,
+        }) + "\n")
+        fh.write(json.dumps({
+            "hiveId": "unknown", "positionID": "p1", "deviceId": "d1",
+            "timestamp": 15, "m_temperature": 82.0,
+        }) + "\n")
+    (out / "notes.ndjson").write_text(
+        json.dumps({"hiveId": "h1", "id": "n1", "timestamp": 15}) + "\n"
+        + json.dumps({"hiveId": "h1", "id": "n2", "timestamp": "bad"}) + "\n"
+    )
+    (out / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|10|20": {"apiaryName": "Yard", "apiaryId": "A1", "hiveName": "H1"}}
+    }))
+    monkeypatch.setattr(flatten, "OUT", out)
+    monkeypatch.setattr(flatten, "RAW", out / "raw")  # does not exist (purged)
+    monkeypatch.setattr(sys, "argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert flatten.main() == 0
+    with gzip.open(out / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        rows = [json.loads(line) for line in fh]
+    assert len(rows) == 1 and rows[0]["hiveName"] == "H1"
+    notes = [json.loads(line) for line in (out / "notes.ndjson").read_text().splitlines()]
+    assert [n["id"] for n in notes] == ["n1"]
+    assert notes[0]["hiveName"] == "H1"
+

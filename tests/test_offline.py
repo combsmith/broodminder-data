@@ -518,3 +518,280 @@ def test_flatten_completed_only_merge_handles_pipe_in_hive_id(tmp_path, monkeypa
     assert [(r["hiveId"], r["timestamp"]) for r in rows] == [(hid, 1)]
     notes = [json.loads(line) for line in (out_dir / "notes.ndjson").read_text().splitlines()]
     assert [(n["hiveId"], n["id"]) for n in notes] == [(hid, "n-1-2")]
+
+
+def test_flatten_merge_completed_only_filters_archived_incomplete_windows(tmp_path, monkeypatch):
+    """--merge --completed-only removes previously archived incomplete rows/notes
+    while preserving completed windows whose raw files were purged, and allows
+    later completed windows to publish with full metadata."""
+    import scripts.flatten as fl
+
+    out_dir = tmp_path / "extract"
+    raw_dir = out_dir / "raw"
+    h1_dir = raw_dir / "h1"
+    hnew_dir = raw_dir / "h_new"
+    h1_dir.mkdir(parents=True)
+    hnew_dir.mkdir(parents=True)
+
+    # Seed existing archive containing:
+    # 1) h1 ts=50 from completed window 0|100 whose raw file was already purged
+    # 2) h1 ts=150 from incomplete window 100-200 (archived by an earlier unfiltered merge)
+    # 3) h_new ts=120 from unmanifested hive (archived earlier with null metadata)
+    prior_readings = [
+        {
+            "apiaryId": "a1", "apiaryName": "Yard", "hiveId": "h1", "hiveName": "Hive 1",
+            "positionID": "p1", "deviceId": "d1", "timestamp": 50,
+            "datetime": "1970-01-01T00:00:50+00:00", "batteryLevel": 95, "chargeRemaining": None,
+            "m_temperature": 74.0,
+        },
+        {
+            "apiaryId": "a1", "apiaryName": "Yard", "hiveId": "h1", "hiveName": "Hive 1",
+            "positionID": "p1", "deviceId": "d1", "timestamp": 150,
+            "datetime": "1970-01-01T00:02:30+00:00", "batteryLevel": 94, "chargeRemaining": None,
+            "m_temperature": 75.0, "m_stale_partial": 99.0,
+        },
+        {
+            "apiaryId": None, "apiaryName": None, "hiveId": "h_new", "hiveName": None,
+            "positionID": "p1", "deviceId": "d2", "timestamp": 120,
+            "datetime": "1970-01-01T00:02:00+00:00", "batteryLevel": 90, "chargeRemaining": None,
+            "m_temperature": 72.0,
+        },
+    ]
+    with gzip.open(out_dir / "readings.ndjson.gz", "wt", encoding="utf-8") as fh:
+        for row in prior_readings:
+            fh.write(json.dumps(row) + "\n")
+
+    prior_notes = [
+        {"hiveId": "h1", "hiveName": "Hive 1", "id": "n-purged-ok", "description": "historical"},
+        {"hiveId": "h1", "hiveName": "Hive 1", "id": "n-inc-ts", "timestamp": 150, "description": "partial"},
+        {"hiveId": "h1", "hiveName": "Hive 1", "id": "n-inc-notime", "description": "partial no ts"},
+        {"hiveId": "h_new", "hiveName": None, "id": "n-new", "timestamp": 120, "description": "unmanifested hive"},
+    ]
+    (out_dir / "notes.ndjson").write_text("\n".join(json.dumps(n) for n in prior_notes) + "\n")
+
+    # Unmanifested raw files currently on disk for 100-200 and h_new
+    with gzip.open(h1_dir / "100-200.readings.json.gz", "wt", encoding="utf-8") as fh:
+        json.dump([{"positionID": "p1", "readings": [
+            {"deviceId": "d1", "timestamp": 150, "batteryLevel": 94, "readings": {"temperature": 75.5}}]}], fh)
+    (h1_dir / "100-200.notes.json").write_text(json.dumps([
+        {"id": "n-inc-ts", "timestamp": 150, "description": "partial"},
+        {"id": "n-inc-notime", "description": "partial no ts"},
+    ]))
+    with gzip.open(hnew_dir / "100-200.readings.json.gz", "wt", encoding="utf-8") as fh:
+        json.dump([{"positionID": "p1", "readings": [
+            {"deviceId": "d2", "timestamp": 120, "batteryLevel": 90, "readings": {"temperature": 72.0}}]}], fh)
+    (hnew_dir / "100-200.notes.json").write_text(json.dumps([
+        {"id": "n-new", "timestamp": 120, "description": "unmanifested hive"},
+    ]))
+
+    # Pass 1: only h1|0|100 is completed in manifest.json
+    (out_dir / "manifest.json").write_text(json.dumps({
+        "completed": {"h1|0|100": {"apiaryName": "Yard", "apiaryId": "a1", "hiveName": "Hive 1"}}
+    }))
+    monkeypatch.setattr(fl, "OUT", out_dir)
+    monkeypatch.setattr(fl, "RAW", raw_dir)
+    monkeypatch.setattr("sys.argv", ["flatten.py", "--merge", "--completed-only"])
+    assert fl.main() == 0
+
+    with gzip.open(out_dir / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        pass1_rows = [json.loads(line) for line in fh]
+    assert [(r["hiveId"], r["timestamp"]) for r in pass1_rows] == [("h1", 50)]
+    with gzip.open(out_dir / "readings.csv.gz", "rt", encoding="utf-8") as fh:
+        csv_header = next(csv.reader(fh))
+    assert "m_stale_partial" not in csv_header
+    pass1_notes = [json.loads(line) for line in (out_dir / "notes.ndjson").read_text().splitlines()]
+    assert [n["id"] for n in pass1_notes] == ["n-purged-ok"]
+
+    # Pass 2: 100-200 completes for both hives (and simulate a pre-existing null-meta archived row)
+    with gzip.open(out_dir / "readings.ndjson.gz", "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(pass1_rows[0]) + "\n")
+        fh.write(json.dumps(prior_readings[2]) + "\n")  # h_new with null metadata
+    (out_dir / "notes.ndjson").write_text(
+        json.dumps(pass1_notes[0]) + "\n" + json.dumps(prior_notes[3]) + "\n"
+    )
+    (out_dir / "manifest.json").write_text(json.dumps({
+        "completed": {
+            "h1|0|100": {"apiaryName": "Yard", "apiaryId": "a1", "hiveName": "Hive 1"},
+            "h1|100|200": {"apiaryName": "Yard", "apiaryId": "a1", "hiveName": "Hive 1"},
+            "h_new|100|200": {"apiaryName": "Yard", "apiaryId": "a1", "hiveName": "Hive New"},
+        }
+    }))
+    monkeypatch.setattr("sys.argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert fl.main() == 0
+
+    with gzip.open(out_dir / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        pass2_rows = {
+            (r["hiveId"], r["timestamp"]): r for r in (json.loads(line) for line in fh)
+        }
+    assert set(pass2_rows) == {("h1", 50), ("h1", 150), ("h_new", 120)}
+    assert pass2_rows[("h1", 150)]["m_temperature"] == 75.5
+    assert pass2_rows[("h_new", 120)]["hiveName"] == "Hive New"
+    assert pass2_rows[("h_new", 120)]["apiaryId"] == "a1"
+    pass2_notes = {
+        n["id"]: n for n in (json.loads(line) for line in (out_dir / "notes.ndjson").read_text().splitlines())
+    }
+    assert set(pass2_notes) == {"n-purged-ok", "n-inc-ts", "n-inc-notime", "n-new"}
+    assert pass2_notes["n-new"]["hiveName"] == "Hive New"
+
+
+def test_extract_all_partial_rate_limit_to_flatten_completed_only_e2e(tmp_path, monkeypatch):
+    """End-to-end contract test: extract_all writes raw files and manifest keys
+    in the exact format flatten.py --completed-only filters."""
+    import scripts.extract_all as ex
+    import scripts.flatten as fl
+    from bm.client import RateLimited
+
+    out_dir = tmp_path / "extract"
+    rate_limit_h2 = {"active": True}
+
+    class PartialClient:
+        def __init__(self):
+            """Initialize partial mock client."""
+            self.call_count = 0
+
+        def __enter__(self):
+            """Enter context manager."""
+            return self
+
+        def __exit__(self, *args):
+            """Exit context manager."""
+            pass
+
+        def apiaries(self):
+            """Return two hives in one apiary."""
+            self.call_count += 1
+            return [{"apiaryId": "a1", "name": "North", "hives": [
+                {"hiveId": "h1", "name": "Hive 1"},
+                {"hiveId": "h2", "name": "Hive 2"},
+            ]}]
+
+        def hive_readings(self, hid, s, e):
+            """Return one reading inside [s, e)."""
+            self.call_count += 1
+            return [{"positionID": "p1", "readings": [
+                {"deviceId": f"dev-{hid}", "timestamp": s + 60, "readings": {"temperature": 88.0}}
+            ]}]
+
+        def hive_notes(self, hid, s, e, **_kwargs):
+            """Rate-limit h2 on first pass after its readings file is already written."""
+            self.call_count += 1
+            if hid == "h2" and rate_limit_h2["active"]:
+                raise RateLimited(429, "GET", f"/user/hive/{hid}/notes", "daily limit exceeded")
+            return {"notes": [{"id": f"note-{hid}", "timestamp": s + 60, "description": "ok"}]}
+
+    monkeypatch.setattr(ex, "BroodMinderClient", PartialClient)
+    monkeypatch.setattr(fl, "OUT", out_dir)
+    monkeypatch.setattr(fl, "RAW", out_dir / "raw")
+
+    # Run 1: h1 completes, h2 writes readings.json.gz then hits 429 on notes (extract exits 0)
+    monkeypatch.setattr("sys.argv", [
+        "extract_all.py", "--start", "2026-01-01", "--end", "2026-01-02", "--out", str(out_dir)
+    ])
+    assert ex.main() == 0
+    assert any((out_dir / "raw" / "h2").glob("*.readings.json.gz"))
+
+    monkeypatch.setattr("sys.argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert fl.main() == 0
+    with gzip.open(out_dir / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        rows = [json.loads(line) for line in fh]
+    assert [r["hiveId"] for r in rows] == ["h1"]
+    assert rows[0]["hiveName"] == "Hive 1"
+
+    # Run 2: rate limit clears; catchup finishes h2 and flatten publishes both hives
+    rate_limit_h2["active"] = False
+    monkeypatch.setattr("sys.argv", [
+        "extract_all.py", "--catchup", "--start", "2026-01-01", "--end", "2026-01-02", "--out", str(out_dir)
+    ])
+    assert ex.main() == 0
+    monkeypatch.setattr("sys.argv", ["flatten.py", "--merge", "--completed-only", "--no-csv"])
+    assert fl.main() == 0
+    with gzip.open(out_dir / "readings.ndjson.gz", "rt", encoding="utf-8") as fh:
+        rows2 = [json.loads(line) for line in fh]
+    assert sorted((r["hiveId"], r["hiveName"]) for r in rows2) == [("h1", "Hive 1"), ("h2", "Hive 2")]
+
+
+def test_cron_sync_exit_code_precedence_and_manifest_guard(tmp_path):
+    """Verify cron_sync.sh skips flatten when manifest.json is absent (preserving
+    extract_rc) and logs both exit codes when both extract and flatten fail."""
+    import os
+    import shutil
+    import stat
+    import subprocess
+
+    if shutil.which("bash") is None:
+        pytest.skip("bash not available")
+
+    repo = tmp_path / "repo"
+    scripts_dir = repo / "scripts"
+    venv_bin = repo / ".venv" / "bin"
+    fake_bin = tmp_path / "bin"
+    scripts_dir.mkdir(parents=True)
+    venv_bin.mkdir(parents=True)
+    fake_bin.mkdir(parents=True)
+
+    cron_src = Path(__file__).resolve().parent.parent / "scripts" / "cron_sync.sh"
+    cron_dst = scripts_dir / "cron_sync.sh"
+    shutil.copyfile(cron_src, cron_dst)
+    cron_dst.chmod(cron_dst.stat().st_mode | stat.S_IEXEC)
+
+    # Portable flock shim so the test runs identically on macOS and Linux
+    flock_shim = fake_bin / "flock"
+    flock_shim.write_text("#!/usr/bin/env bash\nexit 0\n")
+    flock_shim.chmod(0o755)
+
+    calls_log = tmp_path / "calls.log"
+    py_shim = venv_bin / "python"
+    py_shim.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$*" >> "{calls_log}"\n'
+        'if [[ "$1" == "scripts/extract_all.py" ]]; then\n'
+        '  if [[ "${MOCK_WRITE_MANIFEST:-0}" == "1" ]]; then\n'
+        '    mkdir -p data/extract\n'
+        '    echo \'{"completed":{}}\' > data/extract/manifest.json\n'
+        '  fi\n'
+        '  exit "${MOCK_EXTRACT_RC:-0}"\n'
+        'fi\n'
+        'exit "${MOCK_FLATTEN_RC:-0}"\n'
+    )
+    py_shim.chmod(0o755)
+
+    base_env = {**os.environ, "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"}
+    log_file = repo / "data" / "cron_sync.log"
+
+    # 1) Extract fails before manifest.json exists -> flatten skipped, exits with extract_rc (2)
+    res = subprocess.run(
+        ["bash", str(cron_dst)],
+        env={**base_env, "MOCK_EXTRACT_RC": "2", "MOCK_FLATTEN_RC": "1"},
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 2
+    assert calls_log.read_text().splitlines() == ["scripts/extract_all.py --catchup"]
+    assert "failed during extract" in log_file.read_text()
+
+    # 2) Extract exits 0 before any manifest.json exists -> flatten skipped cleanly, exits 0
+    calls_log.unlink()
+    log_file.unlink()
+    res = subprocess.run(
+        ["bash", str(cron_dst)],
+        env={**base_env, "MOCK_EXTRACT_RC": "0", "MOCK_FLATTEN_RC": "1"},
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 0
+    assert calls_log.read_text().splitlines() == ["scripts/extract_all.py --catchup"]
+
+    # 3) Partial extract fails (2) AFTER saving manifest, and flatten ALSO fails (1) -> logs both, exits 2
+    calls_log.unlink()
+    log_file.unlink()
+    res = subprocess.run(
+        ["bash", str(cron_dst)],
+        env={**base_env, "MOCK_WRITE_MANIFEST": "1", "MOCK_EXTRACT_RC": "2", "MOCK_FLATTEN_RC": "1"},
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 2
+    assert calls_log.read_text().splitlines() == [
+        "scripts/extract_all.py --catchup",
+        "scripts/flatten.py --merge --completed-only",
+    ]
+    log_text = log_file.read_text()
+    assert "extract (exit 2)" in log_text and "flatten (exit 1)" in log_text
+
