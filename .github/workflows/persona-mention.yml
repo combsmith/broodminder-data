@@ -35,19 +35,6 @@
 # Requires: GH_PAT_WORKFLOWS org secret (already present in combsmith org).
 name: Persona — Mention Router
 
-permissions: {}
-
-jobs:
-  persona-mention:
-    permissions:
-      contents: read        # the reusable checks out its tooling repo — required,
-                            # or the call fails at startup (a reusable is granted
-                            # no more than the caller; persona-standards.md §5)
-      issues: read
-      pull-requests: read
-    uses: combsmith/.github/.github/workflows/persona-mention-reusable.yml@persona-mention/v1-stable  # NOSONAR(githubactions:S7637) first-party channel ref
-    secrets: inherit  # NOSONAR(githubactions:S7635) org secrets are scoped to first-party reusables
-
 on:
   # issue_comment covers BOTH issues and PR conversation comments.
   issue_comment:
@@ -80,3 +67,16 @@ on:
 # The router has no path for it — and a trigger that fires into a router which
 # ignores it is a dead trigger that only burns runs. Tracked as finding 10 in
 # combsmith/.github#755; that trigger lands with its routing, not before.
+
+permissions: {}
+
+jobs:
+  persona-mention:
+    permissions:
+      contents: read        # the reusable checks out its tooling repo — required,
+                            # or the call fails at startup (a reusable is granted
+                            # no more than the caller; persona-standards.md §5)
+      issues: read
+      pull-requests: read
+    uses: combsmith/.github/.github/workflows/persona-mention-reusable.yml@persona-mention/v1-stable  # NOSONAR(githubactions:S7637) first-party channel ref
+    secrets: inherit  # NOSONAR(githubactions:S7635) org secrets are scoped to first-party reusables
