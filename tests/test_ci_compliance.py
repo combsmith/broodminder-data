@@ -23,6 +23,11 @@ from pathlib import Path
 
 import pytest
 
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: tomli is in requirements.txt
+    import tomli as tomllib
+
 ROOT = Path(__file__).resolve().parent.parent
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 GITLEAKS_CONFIG = ROOT / ".gitleaks.toml"
@@ -72,6 +77,17 @@ def test_gitleaks_config_present():
     assert GITLEAKS_CONFIG.exists(), ".gitleaks.toml must exist at the repo root"
     text = GITLEAKS_CONFIG.read_text()
     assert "[allowlist]" in text, ".gitleaks.toml must define an [allowlist] section"
+
+
+def test_gitleaks_config_enables_the_default_ruleset():
+    # Parse the TOML so whitespace, CRLF, comments and indented table headers
+    # cannot make a setting under another table (e.g. [allowlist]) look like
+    # it belongs to [extend].
+    config = tomllib.loads(GITLEAKS_CONFIG.read_text())
+    assert "extend" in config, ".gitleaks.toml must define an [extend] section"
+    assert config["extend"].get("useDefault") is True, (
+        ".gitleaks.toml must set useDefault = true inside [extend]"
+    )
 
 
 # --- dev-lead channel-form regression guard (issue #67) -----------------------
