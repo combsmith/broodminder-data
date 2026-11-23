@@ -74,6 +74,16 @@ def test_gitleaks_config_present():
     assert "[allowlist]" in text, ".gitleaks.toml must define an [allowlist] section"
 
 
+def test_gitleaks_config_enables_the_default_ruleset():
+    text = GITLEAKS_CONFIG.read_text()
+    # useDefault must live inside the [extend] table, not a later one (e.g. [allowlist]).
+    extend = re.search(r"(?ms)^\[extend\]\n(?P<body>.*?)(?=^\[|\Z)", text)
+    assert extend, ".gitleaks.toml must define an [extend] section"
+    assert re.search(r"(?m)^useDefault = true$", extend["body"]), (
+        ".gitleaks.toml must set useDefault = true inside [extend]"
+    )
+
+
 # --- dev-lead channel-form regression guard (issue #67) -----------------------
 #
 # The flaky `.github/workflows/sonarcloud.yml` failures flagged by Fleet Monitor
