@@ -23,6 +23,11 @@ from pathlib import Path
 
 import pytest
 
+try:  # Python 3.11+
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: tomli is in requirements.txt
+    import tomli as tomllib
+
 ROOT = Path(__file__).resolve().parent.parent
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 GITLEAKS_CONFIG = ROOT / ".gitleaks.toml"
@@ -75,11 +80,12 @@ def test_gitleaks_config_present():
 
 
 def test_gitleaks_config_enables_the_default_ruleset():
-    text = GITLEAKS_CONFIG.read_text()
-    # useDefault must live inside the [extend] table, not a later one (e.g. [allowlist]).
-    extend = re.search(r"(?ms)^\[extend\]\n(?P<body>.*?)(?=^\[|\Z)", text)
-    assert extend, ".gitleaks.toml must define an [extend] section"
-    assert re.search(r"(?m)^useDefault = true$", extend["body"]), (
+    # Parse the TOML so whitespace, CRLF, comments and indented table headers
+    # cannot make a setting under another table (e.g. [allowlist]) look like
+    # it belongs to [extend].
+    config = tomllib.loads(GITLEAKS_CONFIG.read_text())
+    assert "extend" in config, ".gitleaks.toml must define an [extend] section"
+    assert config["extend"].get("useDefault") is True, (
         ".gitleaks.toml must set useDefault = true inside [extend]"
     )
 
