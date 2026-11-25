@@ -14,10 +14,14 @@
 `broodminder-data` provides a unified developer platform for BroodMinder beehive sensor telemetry (internal/ambient temperature, relative humidity, scale weight, swarm indicators, acoustics, radar, and inspection notes). This project provides a **published OpenAPI 3.1 specification**, a **Python CLI and client SDK**, and a **Model Context Protocol (MCP) server** for AI agents.
 
 > [!IMPORTANT]
-> **Unofficial.** Not affiliated with or endorsed by BroodMinder. It uses the
-> public External User API with *your own* API key. The bundled
-> [OpenAPI spec](openapi/broodminder-openapi.yaml) (symlinked to [`openapi.yaml`](openapi.yaml))
-> is reverse-engineered from observed live behavior — corrections via PR are welcome.
+> **Unofficial.** Not affiliated with or endorsed by BroodMinder. It uses
+> BroodMinder's documented [External User API](https://external-api.mybroodminder.com/user/docs) (currently in beta) with
+> *your own* API key. This official documentation is the
+> source of truth. The bundled [OpenAPI spec](openapi/broodminder-openapi.yaml)
+> (symlinked to [`openapi.yaml`](openapi.yaml)) is community-maintained: it adds
+> machine-readable schemas and records where live behavior differs from the
+> official docs. This project adds resumable bulk export, incremental sync,
+> CSV/NDJSON output and an MCP server on top. Corrections via PR are welcome.
 
 ---
 
@@ -41,7 +45,7 @@
 
 1. **📦 Bulk Historical Export**: Walks your entire apiary → hive → device hierarchy with rate-limit-aware, resumable 180-day windowing to extract complete multi-year histories into compressed JSON, NDJSON, and CSV.
 2. **🔄 Periodic Delta Sync**: Lightweight, incremental polling engine designed for regular cron or background services, fetching only new readings since the last checkpoint while buffering for late-arriving BLE uploads.
-3. **📜 Published OpenAPI 3.1 Specification**: Formal, validated OpenAPI 3.1 contract covering all observed endpoints, query parameters, error responses (including HTTP 412 auth responses), and canonical telemetry schemas.
+3. **📜 Published OpenAPI 3.1 Specification**: Formal, validated OpenAPI 3.1 contract covering all observed endpoints, query parameters, error responses (including the HTTP 412 auth responses the live API returns), and canonical telemetry schemas.
 4. **🤖 Model Context Protocol (MCP) Server**: Native MCP integration (`broodminder-mcp`) connecting AI agents (**Claude Desktop, Antigravity CLI, Cursor, Windsurf, Claude Code**) directly to hive metrics, temperature trends, weight deltas, and notes.
 5. **🐍 Python Client Library & CLI Scripts**: A reusable typed client (`BroodMinderClient`), standalone scripts for discovery/extraction/flattening, and the `broodminder-battery` and `broodminder-mcp` entry points. (A unified `broodminder` CLI and typed domain models remain planned — see Discussion #151.)
 
@@ -126,9 +130,11 @@ A flattened, analysis-ready row per reading:
 
 ## Get an API Key
 
-The External User API is in alpha. Request a key from BroodMinder
-([support@broodminder.com](mailto:support@broodminder.com)). The key is tied to your account and only authorizes
-access to your own data.
+The External User API is in beta (see BroodMinder's [API documentation](https://external-api.mybroodminder.com/user/docs)
+and the API section of their [export guide](https://doc.mybroodminder.com/50_mybroodminder_v5j_exporting/)). Request a key from BroodMinder
+([support@broodminder.com](mailto:support@broodminder.com)). Access is granted at
+BroodMinder's discretion and a key can be revoked. The key is tied to your account
+and only authorizes access to your own data.
 
 ---
 
@@ -402,9 +408,12 @@ Extracted data is saved under `data/extract/` (git-ignored):
 
 ## API Behavior & Rate Limits
 
-The machine-readable description is in [`openapi.yaml`](openapi.yaml). Notable quirks handled automatically:
+BroodMinder's [official API documentation](https://external-api.mybroodminder.com/user/docs) describes the endpoints. The
+machine-readable description is in [`openapi.yaml`](openapi.yaml). Notable quirks handled automatically:
 
-- **Authentication:** `X-Api-Key` header. Missing or invalid keys return **HTTP 412** (not 401/403).
+- **Authentication:** `X-Api-Key` header. The official docs list **401** for a missing
+  or invalid key, but the live API returns **HTTP 412** (`api key not specified` /
+  `Key not found`), last verified 2026-11-25. The client treats any non-2xx as an error.
 - **Time Windows:** Maximum ~6 months per request — auto-chunked.
 - **No Pagination:** Each window is a single JSON array payload.
 - **Rate Limit:** ~1,000 calls per UTC day with no `Retry-After` header — the client tracks calls, self-throttles, and catches `429` responses cleanly.
@@ -469,19 +478,6 @@ broodminder-data/
 
 `.env` (your API key) and `data/` (your extracted hive data) are **git-ignored** and never leave your machine.
 All test fixtures use synthetic or anonymized values. Please **never** paste an API key or raw hive telemetry into an issue, PR, or discussion.
-
----
-
-## Commercial Support & Integration
-
-Need enterprise SLAs, custom integrations, or managed telemetry pipelines for BroodMinder sensors, apiaries, or MCP agents?
-
-Commercial support and services are offered through **[CombSmith LLC](https://combsmith.com)**:
-- **Enterprise Support SLAs:** Priority bug fixes, dedicated maintenance windows, and security updates.
-- **Custom Integrations:** Bespoke apiary connectors, custom MCP tools, and automated data pipelines.
-- **Consulting & Implementation:** Architectural guidance, local-first telemetry sync, and monitoring automation.
-
-For commercial inquiries, email [support@combsmith.com](mailto:support@combsmith.com) or visit [combsmith.com](https://combsmith.com).
 
 ---
 
