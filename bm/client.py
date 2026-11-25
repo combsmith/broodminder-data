@@ -2,7 +2,7 @@
 
 Deliberately dependency-light and transport-clean so it can later be lifted
 into an MCP server, a broodly ingestion job, or a Go port. The only stateful
-concession to the alpha API is a call counter + 429 backoff, because the key is
+concession to the beta API is a call counter + 429 backoff, because the key is
 capped at 1000 calls/day.
 
 API surface (per https://external-api.mybroodminder.com/user/docs):

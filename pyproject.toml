@@ -50,7 +50,6 @@ Changelog = "https://github.com/combsmith/broodminder-data/blob/main/CHANGELOG.m
 Issues = "https://github.com/combsmith/broodminder-data/issues"
 Discussions = "https://github.com/combsmith/broodminder-data/discussions"
 Repository = "https://github.com/combsmith/broodminder-data.git"
-"Commercial Support" = "https://combsmith.com"
 
 [tool.setuptools]
 packages = ["bm"]

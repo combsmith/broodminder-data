@@ -1,18 +1,21 @@
 openapi: 3.1.0
 info:
   title: BroodMinder External User API
-  version: 0.1.0-alpha
+  version: 0.1.0-beta
   summary: Read-only access to a user's apiaries, hives, devices, sensor readings and notes.
   description: |
-    Community-maintained, reverse-engineered OpenAPI 3.1 description of the
-    BroodMinder External User API, derived from observed live behavior. It is
-    NOT official — treat the BroodMinder API as the source of truth and please
+    Community-maintained OpenAPI 3.1 description of the BroodMinder External
+    User API (currently in beta). It is NOT official. BroodMinder's official
+    documentation is at https://external-api.mybroodminder.com/user/docs
+    and, with the live API, is the source of truth. This file follows observed
+    live behavior and flags where it differs from the official docs. Please
     open a PR to correct anything that drifts.
 
     NOTES ON ACCURACY / OPEN QUESTIONS (flagged inline with `x-observed` and
     `x-question` extensions):
       * Several responses are bare JSON arrays, not objects.
-      * Authentication failures currently return HTTP 412, not 401/403.
+      * Authentication failures return HTTP 412 live (verified 2026-11-25),
+        although the official docs list 401.
       * Units and the meaning of `swarmState` are not documented and are guessed here.
   license:
     name: MIT
@@ -20,7 +23,7 @@ info:
 
 servers:
   - url: https://external-api.mybroodminder.com
-    description: Production (alpha)
+    description: Production (beta)
 
 security:
   - ApiKeyAuth: []
@@ -194,7 +197,9 @@ components:
       in: header
       name: X-Api-Key
       description: |
-        Per-user key. x-observed: a missing/invalid key currently returns HTTP 412
+        Per-user key, issued by BroodMinder on request (support@broodminder.com);
+        access can be revoked. The official docs list 401 for a missing/invalid
+        key. x-observed (2026-11-25): the live API returns HTTP 412
         with body `{"code":412,"error":"api key not specified"|"Key not found"}`.
         Industry-standard would be 401 (missing/invalid) and 403 (valid but not
         permitted).
