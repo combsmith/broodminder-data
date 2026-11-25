@@ -16,7 +16,7 @@
 > [!IMPORTANT]
 > **Unofficial.** Not affiliated with or endorsed by BroodMinder. It uses
 > BroodMinder's documented [External User API](https://external-api.mybroodminder.com/user/docs) (currently in beta) with
-> *your own* API key. BroodMinder's [official API documentation](https://external-api.mybroodminder.com/user/docs) is the
+> *your own* API key. This official documentation is the
 > source of truth. The bundled [OpenAPI spec](openapi/broodminder-openapi.yaml)
 > (symlinked to [`openapi.yaml`](openapi.yaml)) is community-maintained: it adds
 > machine-readable schemas and records where live behavior differs from the
